@@ -5,9 +5,9 @@ import { z } from 'zod';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { UserRole } from './types';
-import { USERS } from './data';
-import { getAuth, signInAnonymously } from 'firebase/auth';
+import { getAuth, signInWithCustomToken, signOut } from 'firebase/auth';
 import { initializeFirebase }from '@/firebase/server';
+import { admin } from '@/firebase/server';
 
 const loginSchema = z.object({
   role: z.enum(['admin', 'supervisor', 'operator']),
@@ -24,12 +24,23 @@ export async function login(prevState: any, formData: FormData) {
         message: 'Invalid role selected.',
       };
     }
-
+    
     const role = validatedFields.data.role as UserRole;
+    
+    // The UID can be anything. For this demo, we'll use the role as the UID.
+    const uid = role;
+    const customToken = await admin.auth().createCustomToken(uid);
+
     cookies().set('user-role', role, {
       httpOnly: true,
       path: '/',
       maxAge: 60 * 60 * 24 * 7, // 1 week
+    });
+
+    cookies().set('custom-token', customToken, {
+        httpOnly: true,
+        path: '/',
+        maxAge: 60 * 60, // 1 hour
     });
     
   } catch (error) {
@@ -42,8 +53,9 @@ export async function login(prevState: any, formData: FormData) {
 }
 
 export async function logout() {
-  cookies().delete('user-role');
-  redirect('/');
+    cookies().delete('user-role');
+    cookies().delete('custom-token');
+    redirect('/');
 }
 
 const suggestionsSchema = z.object({
