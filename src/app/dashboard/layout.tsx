@@ -47,13 +47,13 @@ export default function DashboardLayout({
   const isSupervisor = role === 'supervisor';
   const isOperator = role === 'operator';
   
-  const MOCK_USERS = {
-    admin: { id: "admin", name: "Admin User", role: "admin" as UserRole, email: "admin@factory.com", avatarUrl: "https://picsum.photos/seed/admin/40/40"},
-    supervisor: { id: "supervisor", name: "Supervisor", role: "supervisor" as UserRole, email: "supervisor@factory.com", avatarUrl: "https://picsum.photos/seed/supervisor/40/40"},
-    operator: { id: "op-1", name: "Anusha Kumari", role: "operator" as UserRole, email: "anusha@factory.com", avatarUrl: "https://picsum.photos/seed/1/40/40"},
+  const currentUser = {
+    id: user.uid,
+    name: `${role.charAt(0).toUpperCase() + role.slice(1)} User`,
+    role: role,
+    email: user.email || `${role}@factory.com`,
+    avatarUrl: `https://picsum.photos/seed/${role}/40/40`,
   };
-
-  const currentUser = MOCK_USERS[role];
 
   return (
     <SidebarProvider>
