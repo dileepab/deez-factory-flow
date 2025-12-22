@@ -1,4 +1,5 @@
 'use server';
+import 'dotenv/config';
 
 import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
 import { z } from 'zod';
@@ -6,8 +7,6 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { UserRole } from './types';
 import { admin } from '@/firebase/server';
-import { getAuth, signOut } from 'firebase/auth';
-import { initializeFirebase } from '@/firebase';
 
 const loginSchema = z.object({
   role: z.enum(['admin', 'supervisor', 'operator']),
