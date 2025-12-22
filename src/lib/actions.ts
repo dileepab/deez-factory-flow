@@ -5,9 +5,9 @@ import { z } from 'zod';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { UserRole } from './types';
-import { getAuth, signInWithCustomToken, signOut } from 'firebase/auth';
-import { initializeFirebase }from '@/firebase/server';
 import { admin } from '@/firebase/server';
+import { getAuth, signOut } from 'firebase/auth';
+import { initializeFirebase } from '@/firebase';
 
 const loginSchema = z.object({
   role: z.enum(['admin', 'supervisor', 'operator']),
