@@ -88,7 +88,7 @@ export default function DashboardLayout({
               </SidebarMenuItem>
             )}
             
-            {isSupervisor && (
+            {(isAdmin || isSupervisor) && (
               <SidebarMenuItem>
                 <SidebarMenuButton asChild tooltip="Production Entry">
                   <Link href="/dashboard#production">

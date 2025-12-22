@@ -1,5 +1,5 @@
+'use client';
 
-import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { UserRole } from '@/lib/types';
 import { PageHeader } from '@/components/shared/page-header';
@@ -9,16 +9,20 @@ import { StyleManagement } from '@/components/dashboard/style-management';
 import { ProductionEntry } from '@/components/dashboard/production-entry';
 import { OperatorDashboard } from '@/components/dashboard/operator-dashboard';
 import { OperatorManagement } from '@/components/dashboard/operator-management';
+import { useUser } from '@/firebase';
 
 export default function DashboardPage() {
-  const cookieStore = cookies();
-  const userRole = cookieStore.get('user-role');
+  const { user, isUserLoading } = useUser();
 
-  if (!userRole) {
-    redirect('/');
+  if (isUserLoading) {
+    return <div>Loading...</div>;
   }
-  
-  const role = userRole.value as UserRole;
+
+  if (!user) {
+    return redirect('/');
+  }
+
+  const role = user.uid as UserRole;
 
   const AdminView = () => (
     <>
@@ -63,9 +67,7 @@ export default function DashboardPage() {
     </>
   );
 
-  const OperatorView = () => (
-    <OperatorDashboard />
-  );
+  const OperatorView = () => <OperatorDashboard />;
 
   return (
     <div className="container mx-auto">
