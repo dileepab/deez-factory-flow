@@ -17,7 +17,7 @@
  * - Admin Supremacy: Users with a document in `/roles_admin` have read/write access to all data paths for management and auditing.
  * - Operator Data Segregation: All data specific to an operator is nested under `/operators/{operatorId}`, enabling secure and performant rules based on the path.
  * - No User Listing: Non-admin users are prevented from listing the `/operators` or `/roles_admin` collections to protect user privacy.
- * - Secure Salary Slips: While operators can view their own salary slips, only admins can create or modify them, reflecting a typical business process.
+ * - Secure Salary Slips: While operators can view their own salary slips, but only admins can create or modify them, reflecting a typical business process.
  * - Prototyping Flexibility: Data shapes are not strictly enforced, but relational integrity (e.g., ensuring an operator's data has the correct `operatorId`) is validated to maintain a secure data structure.
  */
 rules_version = '2';
@@ -102,7 +102,7 @@ service cloud.firestore {
      */
     match /operators/{operatorId} {
       allow get: if isAdmin() || isOwner(operatorId);
-      allow list: if isAdmin();
+      allow list: if isSignedIn();
       allow create: if isAdmin() && request.resource.data.id == operatorId;
       allow update: if isAdmin() && resource != null && request.resource.data.id == resource.data.id;
       allow delete: if isAdmin() && resource != null;

@@ -23,8 +23,8 @@ import { UserNav } from "@/components/shared/user-nav";
 import Link from "next/link";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { USERS } from "@/lib/data";
 import type { UserRole } from "@/lib/types";
+import { USERS } from "@/lib/data";
 
 export default function DashboardLayout({
   children,

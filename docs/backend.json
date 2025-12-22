@@ -1,3 +1,4 @@
+
 {
   "entities": {
     "Style": {
@@ -153,11 +154,22 @@
         "attendanceBonus",
         "totalEarnings"
       ]
+    },
+    "AnonymousUser": {
+      "title": "AnonymousUser",
+      "description": "A user who is not signed in with a specific provider.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The user's unique ID."
+        }
+      },
+      "required": ["uid"]
     }
   },
   "auth": {
     "providers": [
-      "password",
       "anonymous"
     ]
   },

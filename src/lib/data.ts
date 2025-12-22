@@ -1,8 +1,8 @@
 import type { Operator, GarmentStyle, User, UserRole } from "./types";
 
 export const USERS: Record<UserRole, User> = {
-  admin: { id: "user-admin", name: "Admin User", role: "admin", email: "admin@factory.com", avatarUrl: "https://picsum.photos/seed/admin/40/40"},
-  supervisor: { id: "user-supervisor", name: "Supervisor", role: "supervisor", email: "supervisor@factory.com", avatarUrl: "https://picsum.photos/seed/supervisor/40/40"},
+  admin: { id: "admin", name: "Admin User", role: "admin", email: "admin@factory.com", avatarUrl: "https://picsum.photos/seed/admin/40/40"},
+  supervisor: { id: "supervisor", name: "Supervisor", role: "supervisor", email: "supervisor@factory.com", avatarUrl: "https://picsum.photos/seed/supervisor/40/40"},
   operator: { id: "op-1", name: "Anusha Kumari", role: "operator", email: "anusha@factory.com", avatarUrl: "https://picsum.photos/seed/1/40/40"},
 };
 
