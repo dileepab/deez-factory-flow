@@ -1,0 +1,257 @@
+{
+  "entities": {
+    "Style": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Style",
+      "type": "object",
+      "description": "Represents a garment style, including its operations and Standard Minute Value (SMV).",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the style."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the style."
+        },
+        "description": {
+          "type": "string",
+          "description": "Detailed description of the style."
+        },
+        "smv": {
+          "type": "number",
+          "description": "Standard Minute Value (SMV) for the style."
+        },
+        "operations": {
+          "type": "array",
+          "description": "List of operations involved in producing the style.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "smv",
+        "operations"
+      ]
+    },
+    "ProductionEntry": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "ProductionEntry",
+      "type": "object",
+      "description": "Represents hourly production data entered by supervisors.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the production entry."
+        },
+        "operatorId": {
+          "type": "string",
+          "description": "Reference to Operator. (Relationship: Operator 1:N ProductionEntry)"
+        },
+        "styleId": {
+          "type": "string",
+          "description": "Reference to Style. (Relationship: Style 1:N ProductionEntry)"
+        },
+        "timestamp": {
+          "type": "string",
+          "description": "Timestamp of the production entry.",
+          "format": "date-time"
+        },
+        "cumulativeQuantity": {
+          "type": "number",
+          "description": "Cumulative quantity produced at the time of the entry."
+        },
+        "reworkQuantity": {
+          "type": "number",
+          "description": "Quantity of reworked items at the time of the entry."
+        }
+      },
+      "required": [
+        "id",
+        "operatorId",
+        "styleId",
+        "timestamp",
+        "cumulativeQuantity",
+        "reworkQuantity"
+      ]
+    },
+    "Operator": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "Operator",
+      "type": "object",
+      "description": "Represents an operator in the factory.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the operator."
+        },
+        "name": {
+          "type": "string",
+          "description": "Name of the operator."
+        },
+        "targetSalary": {
+          "type": "number",
+          "description": "Target salary for the operator (e.g., 50000 LKR)."
+        },
+        "attendanceBonus": {
+          "type": "number",
+          "description": "Attendance bonus for the operator."
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "targetSalary",
+        "attendanceBonus"
+      ]
+    },
+    "SalarySlip": {
+      "$schema": "http://json-schema.org/draft-07/schema#",
+      "title": "SalarySlip",
+      "type": "object",
+      "description": "Represents a salary slip for an operator.",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the salary slip."
+        },
+        "operatorId": {
+          "type": "string",
+          "description": "Reference to Operator. (Relationship: Operator 1:N SalarySlip)"
+        },
+        "date": {
+          "type": "string",
+          "description": "Date of the salary slip.",
+          "format": "date-time"
+        },
+        "basePay": {
+          "type": "number",
+          "description": "Base pay for the operator."
+        },
+        "pieceRateEarnings": {
+          "type": "number",
+          "description": "Piece rate earnings for the operator."
+        },
+        "attendanceBonus": {
+          "type": "number",
+          "description": "Attendance bonus amount."
+        },
+        "totalEarnings": {
+          "type": "number",
+          "description": "Total earnings for the operator."
+        }
+      },
+      "required": [
+        "id",
+        "operatorId",
+        "date",
+        "basePay",
+        "pieceRateEarnings",
+        "attendanceBonus",
+        "totalEarnings"
+      ]
+    }
+  },
+  "auth": {
+    "providers": [
+      "password",
+      "anonymous"
+    ]
+  },
+  "firestore": {
+    "structure": [
+      {
+        "path": "/styles/{styleId}",
+        "definition": {
+          "entityName": "Style",
+          "schema": {
+            "$ref": "#/backend/entities/Style"
+          },
+          "description": "Stores garment styles, including operations and SMV. Accessible to admins and supervisors.",
+          "params": [
+            {
+              "name": "styleId",
+              "description": "Unique identifier for the style."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/operators/{operatorId}",
+        "definition": {
+          "entityName": "Operator",
+          "schema": {
+            "$ref": "#/backend/entities/Operator"
+          },
+          "description": "Stores operator information, including target salary and attendance bonus.",
+          "params": [
+            {
+              "name": "operatorId",
+              "description": "Unique identifier for the operator."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/operators/{operatorId}/productionEntries/{productionEntryId}",
+        "definition": {
+          "entityName": "ProductionEntry",
+          "schema": {
+            "$ref": "#/backend/entities/ProductionEntry"
+          },
+          "description": "Stores hourly production data entered by supervisors for each operator.  Uses path-based authorization for operator data.",
+          "params": [
+            {
+              "name": "operatorId",
+              "description": "Unique identifier for the operator."
+            },
+            {
+              "name": "productionEntryId",
+              "description": "Unique identifier for the production entry."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/operators/{operatorId}/salarySlips/{salarySlipId}",
+        "definition": {
+          "entityName": "SalarySlip",
+          "schema": {
+            "$ref": "#/backend/entities/SalarySlip"
+          },
+          "description": "Stores salary slips for each operator. Uses path-based authorization for operator data.",
+          "params": [
+            {
+              "name": "operatorId",
+              "description": "Unique identifier for the operator."
+            },
+            {
+              "name": "salarySlipId",
+              "description": "Unique identifier for the salary slip."
+            }
+          ]
+        }
+      },
+      {
+        "path": "/roles_admin/{uid}",
+        "definition": {
+          "entityName": "adminRole",
+          "schema": {
+            "$ref": "#/backend/entities/Operator"
+          },
+          "description": "Marks a user as an administrator. Existence of the document grants admin privileges.",
+          "params": [
+            {
+              "name": "uid",
+              "description": "Firebase Auth UID of the administrator."
+            }
+          ]
+        }
+      }
+    ],
+    "reasoning": "The Firestore data structure is designed to support the FactoryFlow application's features, emphasizing security, scalability, and ease of maintenance. It prioritizes authorization independence by denormalizing authorization-related data, avoiding hierarchical `get()` calls in security rules.  Data is segregated into collections based on access patterns, and consistent naming conventions are used throughout. This structure supports QAPs (Rules are not Filters) by ensuring that listing operations can be securely implemented using the structure defined and path-based ownership where applicable.\n\nAuthorization Independence is achieved primarily through path-based ownership for user-specific data and potential denormalization of role-based access control, if a future requirement dictates it.\n\nThe design leverages path-based ownership for the `ProductionEntry` and `SalarySlip` entities to ensure that operators can only access their own data. Style data is stored in a separate collection, styles, with more open access for supervisors and admins.  If Style access becomes more restricted, a role-based access control membership map could be used to control which users can access a given style. The structure also enables secure `list` operations via structural segregation and path-based authorization.\n\nThe live leaderboard feature can be efficiently supported using Firestore snapshot listeners, and potential AI-powered suggestions can be integrated by creating a collection where AI output is stored and accessed based on user roles."
+  }
+}
