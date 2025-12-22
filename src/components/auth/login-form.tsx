@@ -15,9 +15,6 @@ import {
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AlertCircle, LogIn } from "lucide-react";
 import { useAuth } from "@/firebase";
-import { signInAnonymously } from "firebase/auth";
-import { USERS } from "@/lib/data";
-import type { UserRole } from "@/lib/types";
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -30,25 +27,10 @@ function SubmitButton() {
 }
 
 export function LoginForm() {
-  const auth = useAuth();
   const [state, formAction] = useActionState(login, undefined);
 
-  const handleLogin = (formData: FormData) => {
-    const role = formData.get('role') as UserRole;
-    if (auth && role) {
-      const user = USERS[role];
-      signInAnonymously(auth).then(() => {
-        formAction(formData);
-      }).catch((error) => {
-        console.error("Anonymous sign-in error:", error);
-      });
-    } else {
-      formAction(formData);
-    }
-  };
-
   return (
-    <form action={handleLogin} className="space-y-6">
+    <form action={formAction} className="space-y-6">
       <div className="space-y-2">
         <Label htmlFor="role">Select Your Role</Label>
         <Select name="role" defaultValue="supervisor" required>
