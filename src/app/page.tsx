@@ -1,14 +1,19 @@
+'use client';
+
 import { Factory } from 'lucide-react';
 import { LoginForm } from '@/components/auth/login-form';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { cookies } from 'next/headers';
+import { useUser } from '@/firebase';
 import { redirect } from 'next/navigation';
 
 export default function LoginPage() {
-  const cookieStore = cookies();
-  const userRole = cookieStore.get('user-role');
+  const { user, isUserLoading } = useUser();
 
-  if (userRole) {
+  if(isUserLoading) {
+    return <div>Loading...</div>
+  }
+
+  if (user) {
     redirect('/dashboard');
   }
 

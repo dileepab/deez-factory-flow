@@ -1,3 +1,5 @@
+'use client';
+
 import {
   SidebarProvider,
   Sidebar,
@@ -21,27 +23,37 @@ import {
 } from "lucide-react";
 import { UserNav } from "@/components/shared/user-nav";
 import Link from "next/link";
-import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import type { UserRole } from "@/lib/types";
-import { USERS } from "@/lib/data";
+import { useUser } from "@/firebase";
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const cookieStore = cookies();
-  const role = cookieStore.get("user-role")?.value as UserRole | undefined;
+  const { user, isUserLoading } = useUser();
 
-  if (!role || !USERS[role]) {
+  if (isUserLoading) {
+    return <div>Loading...</div>;
+  }
+
+  if (!user) {
     redirect("/");
   }
 
-  const user = USERS[role];
+  const role = user.uid as UserRole;
   const isAdmin = role === 'admin';
   const isSupervisor = role === 'supervisor';
   const isOperator = role === 'operator';
+  
+  const MOCK_USERS = {
+    admin: { id: "admin", name: "Admin User", role: "admin" as UserRole, email: "admin@factory.com", avatarUrl: "https://picsum.photos/seed/admin/40/40"},
+    supervisor: { id: "supervisor", name: "Supervisor", role: "supervisor" as UserRole, email: "supervisor@factory.com", avatarUrl: "https://picsum.photos/seed/supervisor/40/40"},
+    operator: { id: "op-1", name: "Anusha Kumari", role: "operator" as UserRole, email: "anusha@factory.com", avatarUrl: "https://picsum.photos/seed/1/40/40"},
+  };
+
+  const currentUser = MOCK_USERS[role];
 
   return (
     <SidebarProvider>
@@ -122,7 +134,7 @@ export default function DashboardLayout({
           </SidebarMenu>
         </SidebarContent>
         <SidebarFooter>
-          <UserNav user={user} />
+          <UserNav user={currentUser} />
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>

@@ -1,6 +1,5 @@
 'use client';
 
-import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import type { UserRole } from '@/lib/types';
 import { PageHeader } from '@/components/shared/page-header';
@@ -14,15 +13,16 @@ import { useUser } from '@/firebase';
 
 export default function DashboardPage() {
   const { user, isUserLoading } = useUser();
-  const role = user?.uid as UserRole | undefined;
-
+  
   if (isUserLoading) {
-    return <div>Loading...</div>
+    return <div className="flex justify-center items-center h-40">Loading...</div>
   }
   
-  if (!role) {
+  if (!user) {
     redirect('/');
   }
+  
+  const role = user.uid as UserRole;
 
   const AdminView = () => (
     <>
