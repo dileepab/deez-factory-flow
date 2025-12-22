@@ -34,6 +34,9 @@ export function ProductionEntry() {
   const form = useForm<z.infer<typeof productionSchema>>({
     resolver: zodResolver(productionSchema),
     defaultValues: {
+      operatorId: "",
+      styleId: "",
+      cumulativeQuantity: undefined,
       reworkQuantity: 0,
     },
   });
@@ -123,7 +126,7 @@ export function ProductionEntry() {
                   <FormItem>
                     <FormLabel>Cumulative Quantity</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="e.g., 150" {...field} />
+                      <Input type="number" placeholder="e.g., 150" {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -136,7 +139,7 @@ export function ProductionEntry() {
                   <FormItem>
                     <FormLabel>Rework Quantity</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="e.g., 5" {...field} />
+                      <Input type="number" placeholder="e.g., 5" {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
