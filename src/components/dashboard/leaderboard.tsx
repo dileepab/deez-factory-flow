@@ -13,7 +13,7 @@ export function Leaderboard() {
   const { data: operators, isLoading } = useCollection<Operator>(operatorsQuery);
 
   const sortedOperators = operators
-    ? [...operators].sort((a, b) => b.efficiency - a.efficiency).slice(0, 5)
+    ? [...operators].sort((a, b) => (b.efficiency || 0) - (a.efficiency || 0)).slice(0, 5)
     : [];
 
   const getTrophyColor = (index: number) => {
