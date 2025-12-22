@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { ATTENDANCE_BONUS_LKR } from "@/lib/constants";
@@ -8,6 +9,11 @@ import type { Operator } from "@/lib/types";
 
 export function SalarySlip({ operator }: { operator: Operator }) {
   const earnings = calculateDailyEarnings(operator.earnedMinutes, true, ATTENDANCE_BONUS_LKR);
+  const [currentDate, setCurrentDate] = useState("");
+
+  useEffect(() => {
+    setCurrentDate(new Date().toLocaleDateString());
+  }, []);
   
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR' }).format(amount);
@@ -17,7 +23,7 @@ export function SalarySlip({ operator }: { operator: Operator }) {
     <Card id="earnings" className="w-full max-w-md mx-auto">
       <CardHeader>
         <CardTitle>Today's Estimated Earnings</CardTitle>
-        <CardDescription>Based on your performance today, {new Date().toLocaleDateString()}</CardDescription>
+        <CardDescription>Based on your performance today, {currentDate}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex justify-between items-center">
