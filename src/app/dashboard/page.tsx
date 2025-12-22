@@ -1,25 +1,27 @@
-import { cookies } from "next/headers";
-import { redirect } from "next/navigation";
-import type { UserRole } from "@/lib/types";
-import { OPERATORS } from "@/lib/data";
-import { PageHeader } from "@/components/shared/page-header";
-import { Leaderboard } from "@/components/dashboard/leaderboard";
-import { AiSuggestions } from "@/components/dashboard/ai-suggestions";
-import { StyleManagement } from "@/components/dashboard/style-management";
-import { ProductionEntry } from "@/components/dashboard/production-entry";
-import { SalarySlip } from "@/components/dashboard/salary-slip";
-import { StatCard } from "@/components/dashboard/stat-card";
-import { Target, BarChart, Package, AlertTriangle } from "lucide-react";
-import { useUser } from "@/firebase";
-import { OperatorDashboard } from "@/components/dashboard/operator-dashboard";
+'use client';
 
+import { cookies } from 'next/headers';
+import { redirect } from 'next/navigation';
+import type { UserRole } from '@/lib/types';
+import { PageHeader } from '@/components/shared/page-header';
+import { Leaderboard } from '@/components/dashboard/leaderboard';
+import { AiSuggestions } from '@/components/dashboard/ai-suggestions';
+import { StyleManagement } from '@/components/dashboard/style-management';
+import { ProductionEntry } from '@/components/dashboard/production-entry';
+import { OperatorDashboard } from '@/components/dashboard/operator-dashboard';
+import { OperatorManagement } from '@/components/dashboard/operator-management';
+import { useUser } from '@/firebase';
 
 export default function DashboardPage() {
-  const cookieStore = cookies();
-  const role = cookieStore.get("user-role")?.value as UserRole | undefined;
+  const { user, isUserLoading } = useUser();
+  const role = user?.uid as UserRole | undefined;
 
+  if (isUserLoading) {
+    return <div>Loading...</div>
+  }
+  
   if (!role) {
-    redirect("/");
+    redirect('/');
   }
 
   const AdminView = () => (
@@ -29,21 +31,24 @@ export default function DashboardPage() {
         description="Oversee factory operations and manage system settings."
       />
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
+        <div className="lg:col-span-3 space-y-6">
+          <OperatorManagement />
+        </div>
         <div className="lg:col-span-2 space-y-6">
-            <StyleManagement />
+          <StyleManagement />
         </div>
         <div className="space-y-6">
-            <Leaderboard />
+          <Leaderboard />
         </div>
-         <div className="md:col-span-2 lg:col-span-3">
-             <AiSuggestions />
+        <div className="md:col-span-2 lg:col-span-3">
+          <AiSuggestions />
         </div>
       </div>
     </>
   );
 
   const SupervisorView = () => (
-     <>
+    <>
       <PageHeader
         title="Supervisor Dashboard"
         description="Manage production entry and monitor team performance."
@@ -64,9 +69,9 @@ export default function DashboardPage() {
 
   return (
     <div className="container mx-auto">
-        {role === "admin" && <AdminView />}
-        {role === "supervisor" && <SupervisorView />}
-        {role === "operator" && <OperatorDashboard />}
+      {role === 'admin' && <AdminView />}
+      {role === 'supervisor' && <SupervisorView />}
+      {role === 'operator' && <OperatorDashboard />}
     </div>
   );
 }
