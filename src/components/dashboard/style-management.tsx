@@ -1,7 +1,6 @@
 "use client"
 
 import { useState } from "react";
-import { GARMENT_STYLES } from "@/lib/data";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -10,23 +9,45 @@ import { Badge } from "@/components/ui/badge";
 import { PlusCircle } from "lucide-react";
 import { Input } from "../ui/input";
 import { Label } from "../ui/label";
+import { useCollection, useFirebase, useMemoFirebase } from "@/firebase";
+import { collection, addDoc } from "firebase/firestore";
+import type { GarmentStyle } from "@/lib/types";
+import { useToast } from "@/hooks/use-toast";
+
 
 export function StyleManagement() {
-  const [styles, setStyles] = useState(GARMENT_STYLES);
+  const { toast } = useToast();
+  const { firestore } = useFirebase();
+  const stylesQuery = useMemoFirebase(() => firestore ? collection(firestore, 'styles') : null, [firestore]);
+  const { data: styles, isLoading: stylesLoading } = useCollection<GarmentStyle>(stylesQuery);
   const [open, setOpen] = useState(false);
   
-  // This would be a proper form with react-hook-form in a real app
-  const handleAddStyle = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleAddStyle = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (!firestore) return;
+    
     const formData = new FormData(e.currentTarget);
     const newStyle = {
-      id: `style-${Date.now()}`,
       name: formData.get("styleName") as string,
       totalSmv: parseFloat(formData.get("totalSmv") as string),
-      operations: [],
+      operations: [], // Operations can be managed in a detail view
     };
-    setStyles([newStyle, ...styles]);
-    setOpen(false);
+
+    try {
+      const docRef = await addDoc(collection(firestore, "styles"), newStyle);
+      toast({
+        title: "Style Added",
+        description: `Successfully added style "${newStyle.name}".`,
+      });
+      setOpen(false);
+    } catch (error) {
+      console.error("Error adding style: ", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to add style. Please try again.",
+      });
+    }
   };
 
   return (
@@ -73,7 +94,12 @@ export function StyleManagement() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {styles.map((style) => (
+            {stylesLoading && (
+              <TableRow>
+                <TableCell colSpan={3} className="text-center">Loading styles...</TableCell>
+              </TableRow>
+            )}
+            {styles?.map((style) => (
               <TableRow key={style.id}>
                 <TableCell className="font-medium">{style.name}</TableCell>
                 <TableCell className="text-center">

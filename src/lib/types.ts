@@ -16,6 +16,8 @@ export interface Operator {
   earnedMinutes: number;
   totalProduction: number;
   rework: number;
+  targetSalary: number;
+  attendanceBonus: number;
 }
 
 export interface GarmentStyleOperation {

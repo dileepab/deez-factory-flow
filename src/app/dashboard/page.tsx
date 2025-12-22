@@ -10,6 +10,9 @@ import { ProductionEntry } from "@/components/dashboard/production-entry";
 import { SalarySlip } from "@/components/dashboard/salary-slip";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { Target, BarChart, Package, AlertTriangle } from "lucide-react";
+import { useUser } from "@/firebase";
+import { OperatorDashboard } from "@/components/dashboard/operator-dashboard";
+
 
 export default function DashboardPage() {
   const cookieStore = cookies();
@@ -59,32 +62,11 @@ export default function DashboardPage() {
     </>
   );
 
-  const OperatorView = () => {
-    const operator = OPERATORS[0]; // In a real app, you'd fetch the specific operator
-    return (
-     <>
-      <PageHeader
-        title={`Welcome, ${operator.name}!`}
-        description="Here's a summary of your performance today."
-      />
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-         <StatCard title="Efficiency" value={`${operator.efficiency}%`} icon={Target} description="Target: 85%" />
-         <StatCard title="Earned Minutes" value={String(operator.earnedMinutes)} icon={BarChart} description="vs 480 available" />
-         <StatCard title="Total Production" value={`${operator.totalProduction} pcs`} icon={Package} />
-         <StatCard title="Rework" value={`${operator.rework} pcs`} icon={AlertTriangle} />
-      </div>
-      <div className="mt-6">
-        <SalarySlip operator={operator} />
-      </div>
-    </>
-    );
-  };
-
   return (
     <div className="container mx-auto">
         {role === "admin" && <AdminView />}
         {role === "supervisor" && <SupervisorView />}
-        {role === "operator" && <OperatorView />}
+        {role === "operator" && <OperatorDashboard />}
     </div>
   );
 }
