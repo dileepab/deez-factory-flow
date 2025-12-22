@@ -1,0 +1,46 @@
+"use client";
+
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Separator } from "@/components/ui/separator";
+import { ATTENDANCE_BONUS_LKR } from "@/lib/constants";
+import { calculateDailyEarnings } from "@/lib/calculations";
+import type { Operator } from "@/lib/types";
+
+export function SalarySlip({ operator }: { operator: Operator }) {
+  const earnings = calculateDailyEarnings(operator.earnedMinutes, true, ATTENDANCE_BONUS_LKR);
+  
+  const formatCurrency = (amount: number) => {
+    return new Intl.NumberFormat('en-LK', { style: 'currency', currency: 'LKR' }).format(amount);
+  };
+
+  return (
+    <Card id="earnings" className="w-full max-w-md mx-auto">
+      <CardHeader>
+        <CardTitle>Today's Estimated Earnings</CardTitle>
+        <CardDescription>Based on your performance today, {new Date().toLocaleDateString()}</CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex justify-between items-center">
+          <span className="text-muted-foreground">Base Pay Component</span>
+          <span>{formatCurrency(earnings.basePay)}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-muted-foreground">Piece Rate Earnings (Efficiency based)</span>
+          <span>{formatCurrency(earnings.pieceRateEarnings)}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-muted-foreground">Attendance Bonus Portion</span>
+          <span>{formatCurrency(earnings.attendanceBonus)}</span>
+        </div>
+        <Separator />
+        <div className="flex justify-between items-center text-lg font-bold">
+          <span>Total Estimated Earnings</span>
+          <span className="text-primary">{formatCurrency(earnings.total)}</span>
+        </div>
+      </CardContent>
+       <CardFooter>
+        <p className="text-xs text-muted-foreground">This is an estimate. Final salary may vary based on deductions and other adjustments.</p>
+      </CardFooter>
+    </Card>
+  );
+}
