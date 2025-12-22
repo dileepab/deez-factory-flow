@@ -1,6 +1,7 @@
 'use client';
 
 import { redirect } from 'next/navigation';
+import { useAuth } from '@/firebase';
 import type { UserRole } from '@/lib/types';
 import { PageHeader } from '@/components/shared/page-header';
 import { Leaderboard } from '@/components/dashboard/leaderboard';
@@ -9,12 +10,11 @@ import { StyleManagement } from '@/components/dashboard/style-management';
 import { ProductionEntry } from '@/components/dashboard/production-entry';
 import { OperatorDashboard } from '@/components/dashboard/operator-dashboard';
 import { OperatorManagement } from '@/components/dashboard/operator-management';
-import { useUser } from '@/firebase';
 
 export default function DashboardPage() {
-  const { user, isUserLoading } = useUser();
+  const { user, loading } = useAuth();
 
-  if (isUserLoading) {
+  if (loading) {
     return <div>Loading...</div>;
   }
 
@@ -22,7 +22,7 @@ export default function DashboardPage() {
     return redirect('/');
   }
 
-  const role = user.uid as UserRole;
+  const role = user.role as UserRole;
 
   const AdminView = () => (
     <>

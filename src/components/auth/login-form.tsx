@@ -1,58 +1,84 @@
-"use client";
+'use client';
 
-import { useActionState } from "react";
-import { useFormStatus } from "react-dom";
-import { login } from "@/lib/actions";
-import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Alert, AlertDescription } from "@/components/ui/alert";
-import { AlertCircle, LogIn } from "lucide-react";
-import { useAuth } from "@/firebase";
-
-function SubmitButton() {
-  const { pending } = useFormStatus();
-  return (
-    <Button type="submit" className="w-full" disabled={pending}>
-      {pending ? "Signing In..." : "Sign In"}
-      {!pending && <LogIn className="ml-2 h-4 w-4" />}
-    </Button>
-  );
-}
+import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Alert, AlertDescription } from '@/components/ui/alert';
+import { AlertCircle, LogIn } from 'lucide-react';
+import Link from 'next/link';
+import { useAuth } from '@/firebase';
+import { FIREBASE_AUTH_ERRORS } from '@/lib/constants';
+import { sessionLogin } from '@/lib/actions';
 
 export function LoginForm() {
-  const [state, formAction] = useActionState(login, undefined);
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const { signInWithEmailAndPassword } = useAuth();
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const userCredential = await signInWithEmailAndPassword(email, password);
+      if (userCredential.user) {
+        const idToken = await userCredential.user.getIdToken();
+        await sessionLogin(idToken);
+      }
+    } catch (error: any) {
+      setError(FIREBASE_AUTH_ERRORS[error.code] || 'An unexpected error occurred.');
+      setIsLoading(false);
+    }
+  };
 
   return (
-    <form action={formAction} className="space-y-6">
+    <form onSubmit={handleSubmit} className="space-y-6">
       <div className="space-y-2">
-        <Label htmlFor="role">Select Your Role</Label>
-        <Select name="role" defaultValue="supervisor" required>
-          <SelectTrigger id="role" className="w-full">
-            <SelectValue placeholder="Select a role" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="admin">Admin</SelectItem>
-            <SelectItem value="supervisor">Supervisor</SelectItem>
-            <SelectItem value="operator">Operator</SelectItem>
-          </SelectContent>
-        </Select>
+        <Label htmlFor="email">Email</Label>
+        <Input
+          id="email"
+          name="email"
+          type="email"
+          placeholder="m@example.com"
+          required
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+      </div>
+      <div className="space-y-2">
+        <Label htmlFor="password">Password</Label>
+        <Input
+          id="password"
+          name="password"
+          type="password"
+          required
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+        />
       </div>
 
-      {state?.message && (
+      {error && (
         <Alert variant="destructive">
           <AlertCircle className="h-4 w-4" />
-          <AlertDescription>{state.message}</AlertDescription>
+          <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
-      
-      <SubmitButton />
+
+      <Button type="submit" className="w-full" disabled={isLoading}>
+        {isLoading ? 'Signing In...' : 'Sign In'}
+        {!isLoading && <LogIn className="ml-2 h-4 w-4" />}
+      </Button>
+
+      <div className="text-center text-sm">
+        Don't have an account?{" "}
+        <Link href="/signup" className="underline">
+          Sign up
+        </Link>
+      </div>
     </form>
   );
 }

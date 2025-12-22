@@ -25,16 +25,16 @@ import { UserNav } from "@/components/shared/user-nav";
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import type { UserRole } from "@/lib/types";
-import { useUser } from "@/firebase";
+import { useAuth } from "@/firebase";
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { user, isUserLoading } = useUser();
+  const { user, loading } = useAuth();
 
-  if (isUserLoading) {
+  if (loading) {
     return <div>Loading...</div>;
   }
 
@@ -42,18 +42,10 @@ export default function DashboardLayout({
     redirect("/");
   }
 
-  const role = user.uid as UserRole;
+  const role = user.role as UserRole;
   const isAdmin = role === 'admin';
   const isSupervisor = role === 'supervisor';
   const isOperator = role === 'operator';
-  
-  const currentUser = {
-    id: user.uid,
-    name: `${role.charAt(0).toUpperCase() + role.slice(1)} User`,
-    role: role,
-    email: user.email || `${role}@factory.com`,
-    avatarUrl: `https://picsum.photos/seed/${role}/40/40`,
-  };
 
   return (
     <SidebarProvider>
@@ -134,7 +126,7 @@ export default function DashboardLayout({
           </SidebarMenu>
         </SidebarContent>
         <SidebarFooter>
-          <UserNav user={currentUser} />
+          <UserNav />
         </SidebarFooter>
       </Sidebar>
       <SidebarInset>
