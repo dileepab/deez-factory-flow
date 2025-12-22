@@ -11,7 +11,7 @@ export function PageHeader({ title, description, children }: PageHeaderProps) {
     <>
       <div className="flex items-start justify-between gap-4 py-4">
         <div className="space-y-1.5">
-          <h1 className="text-2xl font-bold tracking-tight md:text-3xl font-headline">
+          <h1 className="text-2xl font-bold tracking-tight md:text-3xl">
             {title}
           </h1>
           {description && (
