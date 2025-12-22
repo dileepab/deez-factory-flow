@@ -23,8 +23,8 @@ export function FirebaseClientProvider({
 }: FirebaseClientProviderProps) {
   const [isClient, setIsClient] = useState(false);
   const [isTokenSigningIn, setIsTokenSigningIn] = useState(true);
+  
   const firebaseServices = useMemo(() => {
-    // Initialize Firebase on the client side, once per component mount.
     return initializeFirebase();
   }, []);
 
@@ -45,7 +45,8 @@ export function FirebaseClientProvider({
   }, [firebaseServices.auth]);
 
   if (!isClient || isTokenSigningIn) {
-    return <div>Authenticating...</div>;
+    // Adding suppressHydrationWarning here to handle browser extension interference
+    return <div suppressHydrationWarning>Authenticating...</div>;
   }
 
   return (
