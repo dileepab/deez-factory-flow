@@ -175,7 +175,16 @@ const Sidebar = React.forwardRef<
     },
     ref
   ) => {
-    const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
+    const { isMobile, state, openMobile, setOpenMobile } = useSidebar();
+    const [isMounted, setIsMounted] = React.useState(false);
+
+    React.useEffect(() => {
+      setIsMounted(true);
+    }, []);
+
+    if (!isMounted) {
+      return <Skeleton className="h-screen w-[--sidebar-width]" style={{'--sidebar-width': SIDEBAR_WIDTH} as React.CSSProperties} />;
+    }
 
     if (collapsible === "none") {
       return (
