@@ -4,7 +4,7 @@ import React, { useMemo, type ReactNode, useEffect, useState } from 'react';
 import { FirebaseProvider } from '@/firebase/provider';
 import { initializeFirebase } from '@/firebase';
 import { getCookie } from 'cookies-next';
-import { signInWithCustomToken } from 'firebase/auth';
+import { signInWithCustomToken, signOut as firebaseSignOut } from 'firebase/auth'; // Import signOut
 
 interface FirebaseClientProviderProps {
   children: ReactNode;
@@ -41,6 +41,7 @@ export function FirebaseClientProvider({ children }: FirebaseClientProviderProps
       firebaseApp={firebaseServices.firebaseApp}
       auth={firebaseServices.auth}
       firestore={firebaseServices.firestore}
+      signOut={() => firebaseSignOut(firebaseServices.auth)}
     >
       {children}
     </FirebaseProvider>

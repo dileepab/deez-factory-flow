@@ -14,8 +14,16 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { LogOut, User as UserIcon } from "lucide-react";
 import type { User } from "@/lib/types";
+import { useFirebase } from "@/firebase";
 
 export function UserNav({ user }: { user: User }) {
+  const { signOut } = useFirebase();
+
+  const handleLogout = async () => {
+    await signOut();
+    await logout();
+  };
+  
   const getInitials = (name: string) => {
     return name
       .split(" ")
@@ -51,9 +59,7 @@ export function UserNav({ user }: { user: User }) {
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
         <DropdownMenuItem
-          onClick={async () => {
-            await logout();
-          }}
+          onClick={handleLogout}
           className="cursor-pointer"
         >
           <LogOut className="mr-2 h-4 w-4" />
