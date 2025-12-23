@@ -3,97 +3,126 @@
 import { z } from 'zod';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { admin, db } from '@/firebase/server';
+import { auth, db } from '@/firebase/server';
 import { FIREBASE_AUTH_ERRORS } from './constants';
-import type { UserRole } from './types';
+import type { UserRole, Operator } from './types';
+import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
+import type { EfficiencyImprovementSuggestionsOutput } from '@/ai/flows/efficiency-improvement-suggestions';
 
-const signupSchema = z.object({
-  email: z.string().email(),
-  password: z.string().min(6),
-  role: z.enum(['admin', 'supervisor', 'operator']),
-});
+const signupSchema = z
+  .object({
+    email: z.string().email({ message: 'Please enter a valid email address.' }),
+    password: z.string().min(6, { message: 'Password must be at least 6 characters long.' }),
+    'confirm-password': z.string(),
+    role: z.enum(['admin', 'supervisor', 'operator']),
+  })
+  .refine((data) => data.password === data['confirm-password'], {
+    message: "Passwords don't match.",
+    path: ['confirm-password'],
+  });
 
 export async function signup(prevState: any, formData: FormData) {
   const validatedFields = signupSchema.safeParse({
     email: formData.get('email'),
     password: formData.get('password'),
+    'confirm-password': formData.get('confirm-password'),
     role: formData.get('role'),
   });
 
   if (!validatedFields.success) {
     const errorMessages = validatedFields.error.flatten().fieldErrors;
+    const messages = Object.values(errorMessages).flat();
     return {
-      message: Object.values(errorMessages).join(', '),
+      message: messages.join(' '),
     };
   }
 
   const { email, password, role } = validatedFields.data;
 
   try {
-    const user = await admin.auth().createUser({
+    const user = await auth.createUser({
       email,
       password,
     });
 
-    await admin.auth().setCustomUserClaims(user.uid, { role });
-    
+    await auth.setCustomUserClaims(user.uid, { role });
+
     await db.collection('users').doc(user.uid).set({
-        email,
-        role,
+      email,
+      role,
     });
 
-    const customToken = await admin.auth().createCustomToken(user.uid);
-
-    cookies().set('user-role', role, {
-      httpOnly: true,
-      path: '/',
-      maxAge: 60 * 60 * 24 * 7, // 1 week
-    });
-
-    cookies().set('custom-token', customToken, {
-      httpOnly: true,
-      path: '/',
-      maxAge: 60 * 60, // 1 hour
-    });
+    return { success: true };
 
   } catch (error: any) {
+    console.error('Signup error:', error);
     return {
-      message: FIREBASE_AUTH_ERRORS[error.code] || 'An unexpected error occurred.',
+      success: false,
+      message: FIREBASE_AUTH_ERRORS[error.code] || `Server error: ${error.message}`,
     };
   }
-
-  redirect('/dashboard');
 }
 
+export async function sessionLogin(idToken: string) {
+  try {
+    const expiresIn = 60 * 60 * 24 * 5 * 1000; // 5 days
+    const sessionCookie = await auth.createSessionCookie(idToken, { expiresIn });
 
-export async function sessionLogin(customToken: string) {
-    try {
-        const decodedToken = await admin.auth().verifyIdToken(customToken);
-        const role = (decodedToken.role as UserRole) || 'operator';
+    cookies().set('__session', sessionCookie, {
+      maxAge: expiresIn,
+      httpOnly: true,
+      secure: true,
+      path: '/',
+    });
 
-        cookies().set('user-role', role, {
-            httpOnly: true,
-            path: '/',
-            maxAge: 60 * 60 * 24 * 7, // 1 week
-        });
+    return { success: true };
+  } catch (error: any) {
+    console.error('Session login error:', error);
+    return {
+      success: false,
+      message: `Server error: ${error.message}`,
+    };
+  }
+}
 
-        cookies().set('custom-token', customToken, {
-            httpOnly: true,
-            path: '/',
-            maxAge: 60 * 60, // 1 hour
-        });
-
-        redirect('/dashboard');
-    } catch (error) {
-        console.error(error);
-        return {
-            message: 'An unexpected error occurred.',
-        };
-    }
+export async function sessionLogout() {
+  cookies().delete('__session');
 }
 
 export async function logout() {
-  cookies().delete('user-role');
-  cookies().delete('custom-token');
+  const sessionCookie = cookies().get('__session')?.value;
+  if (sessionCookie) {
+    try {
+      const decodedClaims = await auth.verifySessionCookie(sessionCookie);
+      await auth.revokeRefreshTokens(decodedClaims.sub);
+    } catch (error) {
+      console.error('Error revoking tokens:', error);
+    }
+  }
+  await sessionLogout();
   redirect('/');
+}
+
+export async function getSuggestions(
+  productionData: string
+): Promise<EfficiencyImprovementSuggestionsOutput | { error: string }> {
+  try {
+    const suggestions = await getEfficiencyImprovementSuggestions(productionData);
+    return suggestions;
+  } catch (error: any) {
+    console.error('Error getting AI suggestions:', error);
+    return {
+      error: `Server error: ${error.message}`,
+    };
+  }
+}
+
+export async function promoteToSupervisor(userId: string) {
+  try {
+    await auth.setCustomUserClaims(userId, { role: 'supervisor' });
+    await db.collection('users').doc(userId).update({ role: 'supervisor' });
+  } catch (error: any) {
+    console.error('Error promoting user to supervisor:', error);
+    throw new Error('Failed to promote user');
+  }
 }

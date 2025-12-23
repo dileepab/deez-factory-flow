@@ -3,18 +3,14 @@
 import { Factory } from 'lucide-react';
 import { LoginForm } from '@/components/auth/login-form';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { useUser } from '@/firebase';
-import { redirect } from 'next/navigation';
+import { useAuth } from '@/auth-provider';
+import { Loader } from '@/components/loader';
 
 export default function LoginPage() {
-  const { user, isUserLoading } = useUser();
+  const { user, loading } = useAuth();
 
-  if(isUserLoading) {
-    return <div>Loading...</div>
-  }
-
-  if (user) {
-    redirect('/dashboard');
+  if (loading || user) {
+    return <Loader />;
   }
 
   return (
@@ -26,7 +22,7 @@ export default function LoginPage() {
               <Factory className="h-8 w-8" />
             </div>
             <CardTitle className="text-3xl font-bold tracking-tight">
-              FactoryFlow
+              Welcome to FactoryFlow
             </CardTitle>
             <CardDescription>
               Sign in to access your dashboard

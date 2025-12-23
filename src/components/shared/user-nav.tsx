@@ -1,7 +1,7 @@
 'use client';
 
 import { logout } from '@/lib/actions';
-import { useAuth } from '@/firebase';
+import { useAuth } from '@/auth-provider';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Button } from '@/components/ui/button';
 import {

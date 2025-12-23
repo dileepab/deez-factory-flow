@@ -10,3 +10,10 @@ export const FIREBASE_AUTH_ERRORS: { [key: string]: string } = {
   'auth/wrong-password': 'The password is invalid or the user does not have a password.',
   'auth/invalid-credential': 'The credential used to sign in is invalid.',
 };
+
+export const ATTENDANCE_BONUS_LKR = 1000;
+
+// Salary Calculation Constants
+export const TARGET_SALARY_LKR = 50000;
+export const WORKING_DAYS_PER_MONTH = 25;
+export const AVAILABLE_MINUTES_PER_DAY = 480; // 8 hours * 60 minutes

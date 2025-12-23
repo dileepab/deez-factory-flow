@@ -6,18 +6,13 @@ export interface User {
   role: UserRole;
   email: string;
   avatarUrl: string;
-}
-
-export interface Operator {
-  id:string;
-  name: string;
-  avatarUrl: string;
-  efficiency: number; // as a percentage
-  earnedMinutes: number;
-  totalProduction: number;
-  rework: number;
-  targetSalary: number;
-  attendanceBonus: number;
+  // Operator fields
+  efficiency?: number; // as a percentage
+  earnedMinutes?: number;
+  totalProduction?: number;
+  rework?: number;
+  targetSalary?: number;
+  attendanceBonus?: number;
 }
 
 export interface GarmentStyleOperation {

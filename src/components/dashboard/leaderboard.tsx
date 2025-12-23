@@ -1,20 +1,23 @@
-"use client";
+'use client';
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Crown, ArrowUp, ArrowDown, Loader2 } from "lucide-react";
-import { useCollection, useFirebase, useMemoFirebase } from "@/firebase";
-import { collection } from "firebase/firestore";
-import type { Operator } from "@/lib/types";
+import { useCollection } from "@/firebase/firestore/use-collection";
+import { collection, query, where } from "firebase/firestore";
+import { firestore } from "@/firebase/client";
+import type { User } from "@/lib/types";
+import { useMemo } from "react";
+import { useMemoFirebase } from "@/firebase/use-memo-firebase";
 
 export function Leaderboard() {
-  const { firestore } = useFirebase();
-  const operatorsQuery = useMemoFirebase(() => firestore ? collection(firestore, 'operators') : null, [firestore]);
-  const { data: operators, isLoading } = useCollection<Operator>(operatorsQuery);
+  const operatorsQuery = useMemoFirebase(() => query(collection(firestore, 'users'), where('role', '==', 'operator')), []);
+  const { data: operators, isLoading: loading } = useCollection<User>(operatorsQuery);
 
-  const sortedOperators = operators
-    ? [...operators].sort((a, b) => (b.efficiency || 0) - (a.efficiency || 0)).slice(0, 5)
-    : [];
+  const sortedOperators = useMemo(() => 
+    operators ? [...operators].sort((a, b) => (b.efficiency || 0) - (a.efficiency || 0)).slice(0, 5) : [],
+    [operators]
+  );
 
   const getTrophyColor = (index: number) => {
     if (index === 0) return "text-yellow-500";
@@ -30,7 +33,7 @@ export function Leaderboard() {
         <CardDescription>By current day efficiency</CardDescription>
       </CardHeader>
       <CardContent>
-        {isLoading ? (
+        {loading ? (
           <div className="flex justify-center items-center h-40">
             <Loader2 className="h-8 w-8 animate-spin text-primary" />
           </div>

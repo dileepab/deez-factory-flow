@@ -1,22 +1,24 @@
 "use client";
 
-import { useUser, useDoc, useMemoFirebase } from "@/firebase";
+import { useAuth } from "@/auth-provider";
+import { useDoc } from "@/firebase/firestore/use-doc";
 import { doc } from "firebase/firestore";
-import { useFirebase } from "@/firebase";
+import { firestore } from "@/firebase/client";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { SalarySlip } from "@/components/dashboard/salary-slip";
 import { Target, BarChart, Package, AlertTriangle, Loader2 } from "lucide-react";
 import type { Operator } from "@/lib/types";
+import { useMemo } from "react";
 
 export function OperatorDashboard() {
-  const { user, isUserLoading } = useUser();
-  const { firestore } = useFirebase();
+  const { user, loading: isUserLoading } = useAuth();
 
-  const operatorRef = useMemoFirebase(
-    () => (firestore && user ? doc(firestore, "operators", user.uid) : null),
-    [firestore, user]
+  const operatorRef = useMemo(
+    () => (user ? doc(firestore, "operators", user.uid) : null),
+    [user]
   );
+  
   const { data: operator, isLoading: operatorLoading } = useDoc<Operator>(operatorRef);
 
   if (isUserLoading || operatorLoading) {

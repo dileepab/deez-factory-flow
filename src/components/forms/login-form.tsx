@@ -18,8 +18,6 @@ import { Loader2 } from 'lucide-react';
 import { FIREBASE_AUTH_ERRORS } from '@/lib/constants';
 import { signInWithEmailAndPassword } from 'firebase/auth';
 import { auth } from '@/firebase/client';
-import Link from 'next/link';
-import { PasswordInput } from '@/components/ui/password-input';
 
 const formSchema = z.object({
   email: z.string().email({ message: 'Please enter a valid email address.' }),
@@ -38,11 +36,17 @@ export function LoginForm() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     try {
+      // Sign in the user. The AuthProvider will detect the change and the page guard
+      // will handle the redirect once the user state is confirmed.
       await signInWithEmailAndPassword(auth, values.email, values.password);
+
       toast({
         title: 'Login Successful',
         description: "Welcome back! You're being redirected...",
       });
+
+      // DO NOT redirect here. The page component will handle it.
+
     } catch (error: any) {
       console.error('Login error:', error);
       const errorMessage =
@@ -83,10 +87,14 @@ export function LoginForm() {
             <FormItem>
               <FormLabel>Password</FormLabel>
               <FormControl>
-                <PasswordInput {...field} autoComplete="current-password" />
+                <Input
+                  type="password"
+                  {...field}
+                  autoComplete="current-password"
+                />
               </FormControl>
               <FormMessage />
-            </FormItem>
+            </To olItem>
           )}
         />
         <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>
@@ -95,12 +103,6 @@ export function LoginForm() {
           )}
           Sign In
         </Button>
-        <div className="text-center text-sm">
-            Don't have an account?{" "}
-            <Link href="/signup" className="underline">
-            Sign up
-            </Link>
-        </div>
       </form>
     </Form>
   );

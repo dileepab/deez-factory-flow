@@ -10,9 +10,11 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { Save } from "lucide-react";
-import { useCollection, useFirebase, useMemoFirebase } from "@/firebase";
+import { useCollection } from "@/firebase/firestore/use-collection";
+import { firestore } from "@/firebase/client";
 import { collection, addDoc, serverTimestamp } from "firebase/firestore";
 import type { Operator, GarmentStyle } from "@/lib/types";
+import { useMemo } from "react";
 
 const productionSchema = z.object({
   operatorId: z.string().min(1, "Please select an operator."),
@@ -23,12 +25,11 @@ const productionSchema = z.object({
 
 export function ProductionEntry() {
   const { toast } = useToast();
-  const { firestore } = useFirebase();
 
-  const operatorsQuery = useMemoFirebase(() => firestore ? collection(firestore, 'operators') : null, [firestore]);
+  const operatorsQuery = useMemo(() => firestore ? collection(firestore, 'operators') : null, []);
   const { data: operators, isLoading: operatorsLoading } = useCollection<Operator>(operatorsQuery);
 
-  const stylesQuery = useMemoFirebase(() => firestore ? collection(firestore, 'styles') : null, [firestore]);
+  const stylesQuery = useMemo(() => firestore ? collection(firestore, 'styles') : null, []);
   const { data: styles, isLoading: stylesLoading } = useCollection<GarmentStyle>(stylesQuery);
 
   const form = useForm<z.infer<typeof productionSchema>>({

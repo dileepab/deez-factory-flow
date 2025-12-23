@@ -3,29 +3,25 @@
 import { Factory } from 'lucide-react';
 import { SignupForm } from '@/components/auth/signup-form';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { useUser } from '@/firebase';
-import { redirect } from 'next/navigation';
+import { useAuth } from '@/auth-provider';
+import { Loader } from '@/components/loader';
 
 export default function SignupPage() {
-  const { user, isUserLoading } = useUser();
+  const { user, loading } = useAuth();
 
-  if(isUserLoading) {
-    return <div>Loading...</div>
-  }
-
-  if (user) {
-    redirect('/dashboard');
+  if (loading || user) {
+    return <Loader />;
   }
 
   return (
     <main className="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-950">
-      <Card className="w-full max-w-md mx-4">
+      <Card className="w-full max-w-md">
         <CardHeader className="text-center">
-          <Factory className="mx-auto h-8 w-8" />
-          <CardTitle className="mt-4 text-2xl font-bold tracking-tight">Create an account</CardTitle>
-          <CardDescription className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            Welcome! Please enter your details.
-          </CardDescription>
+          <div className="mx-auto mb-4">
+            <Factory size={48} />
+          </div>
+          <CardTitle className="text-2xl font-bold">Create an Account</CardTitle>
+          <CardDescription>Enter your details to get started.</CardDescription>
         </CardHeader>
         <CardContent>
           <SignupForm />

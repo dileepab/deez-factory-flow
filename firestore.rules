@@ -1,156 +1,37 @@
-/**
- * Core Philosophy:
- * This ruleset implements a hybrid security model combining Role-Based Access Control (RBAC)
- * and an Ownership model. A special collection, `/roles_admin`, grants administrative
- * privileges to designated users, allowing them to manage core data like styles and operators.
- * All other authenticated users are treated as "operators" who have strict ownership over their
- * private subcollections, such as production entries and salary slips.
- *
- * Data Structure:
- * - /styles/{styleId}: Publicly readable style information, managed by admins.
- * - /operators/{operatorId}: Core operator data, managed by admins. Operators can read their own profile.
- * - /operators/{operatorId}/productionEntries/{...}: Data owned by the operator, accessible only to them and admins.
- * - /operators/{operatorId}/salarySlips/{...}: Sensitive data owned by the operator, readable by them but only managed by admins.
- * - /roles_admin/{uid}: A lookup collection where the existence of a document grants admin rights.
- *
- * Key Security Decisions:
- * - Admin Supremacy: Users with a document in `/roles_admin` have read/write access to all data paths for management and auditing.
- * - Operator Data Segregation: All data specific to an operator is nested under `/operators/{operatorId}`, enabling secure and performant rules based on the path.
- * - No User Listing: Non-admin users are prevented from listing the `/operators` or `/roles_admin` collections to protect user privacy.
- * - Secure Salary Slips: While operators can view their own salary slips, but only admins can create or modify them, reflecting a typical business process.
- * - Prototyping Flexibility: Data shapes are not strictly enforced, but relational integrity (e.g., ensuring an operator's data has the correct `operatorId`) is validated to maintain a secure data structure.
- */
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // --------------------------------------------------------------------
-    // Helper Functions
-    // --------------------------------------------------------------------
-
-    /**
-     * Returns true if the user is authenticated.
-     */
-    function isSignedIn() {
-      return request.auth != null;
+    // Helper function to get the user's role from the 'users' collection.
+    function getUserRole(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data.role;
     }
 
-    /**
-     * Returns true if the authenticated user's UID matches the provided userId.
-     * This is the foundation of the document ownership model.
-     */
-    function isOwner(userId) {
-      return isSignedIn() && request.auth.uid == userId;
+    // Rules for the 'users' collection.
+    match /users/{userId} {
+      // Allow users to read their own user document.
+      allow read: if request.auth.uid == userId;
+      // Allow users to create their own user document upon signup.
+      allow create: if request.auth.uid == userId;
     }
 
-    /**
-     * Returns true if the user is an administrator.
-     * Checks for the existence of a document in the admin roles collection.
-     */
-    function isAdmin() {
-      return isSignedIn() && exists(/databases/$(database)/documents/roles_admin/$(request.auth.uid));
-    }
-    
-    /**
-     * Returns true if the user is the owner of an existing document.
-     * Used for safe update and delete operations.
-     */
-    function isExistingOwner(userId) {
-      return isOwner(userId) && resource != null;
-    }
-
-    /**
-     * Validates that the operatorId within a new document matches the operatorId in the path.
-     * Enforces relational integrity on creation.
-     */
-    function hasCorrectOperatorId(operatorId) {
-      return request.resource.data.operatorId == operatorId;
-    }
-    
-    /**
-     * Validates that the operatorId field is immutable on updates.
-     * Prevents re-assigning a document to a different operator.
-     */
-    function isOperatorIdImmutable() {
-      return request.resource.data.operatorId == resource.data.operatorId;
-    }
-
-    // --------------------------------------------------------------------
-    // Collection Rules
-    // --------------------------------------------------------------------
-
-    /**
-     * @description Manages garment styles. Readable by any signed-in user, but only writable by administrators.
-     * @path /styles/{styleId}
-     * @allow (get) An authenticated user reads a style document.
-     * @deny (create) A non-admin user attempts to create a new style.
-     * @principle Implements public read access with role-based write restrictions for shared data.
-     */
-    match /styles/{styleId} {
-      allow get, list: if isSignedIn();
-      allow create, update, delete: if isAdmin();
-    }
-
-    /**
-     * @description Manages operator profiles. Only admins can list or manage operators.
-     *              An operator is allowed to read their own profile document.
-     * @path /operators/{operatorId}
-     * @allow (get) An operator with uid `op123` reads `/operators/op123`.
-     * @deny (list) A non-admin user tries to list all operators.
-     * @deny (update) An operator `op123` tries to update their own salary info at `/operators/op123`.
-     * @principle Restricts access to sensitive user data, allowing self-read but centralizing management under admins.
-     */
+    // Rules for the 'operators' collection.
     match /operators/{operatorId} {
-      allow get: if isAdmin() || isOwner(operatorId);
-      allow list: if isSignedIn();
-      allow create: if isAdmin() && request.resource.data.id == operatorId;
-      allow update: if isAdmin() && resource != null && request.resource.data.id == resource.data.id;
-      allow delete: if isAdmin() && resource != null;
+      // Allow authenticated users to read and write to the operators collection.
+      allow read, write: if request.auth != null;
     }
 
-    /**
-     * @description Manages an operator's hourly production entries.
-     *              Only the operator themselves or an admin can access this data.
-     * @path /operators/{operatorId}/productionEntries/{productionEntryId}
-     * @allow (create) An operator `op123` creates a new entry at `/operators/op123/productionEntries/entry_abc`.
-     * @deny (get) Operator `op456` tries to read an entry at `/operators/op123/productionEntries/entry_abc`.
-     * @deny (create) Operator `op123` creates an entry with `operatorId: 'op456'`.
-     * @principle Enforces strict data ownership using path-based security and validates relational integrity.
-     */
-    match /operators/{operatorId}/productionEntries/{productionEntryId} {
-      allow get, list: if isAdmin() || isOwner(operatorId);
-      allow create: if isOwner(operatorId) && hasCorrectOperatorId(operatorId);
-      allow update: if isExistingOwner(operatorId) && isOperatorIdImmutable();
-      allow delete: if isExistingOwner(operatorId);
+    // Rules for the 'styles' collection.
+    match /styles/{styleId} {
+        // Allow authenticated users to read and write to the styles collection.
+        allow read, write: if request.auth != null;
     }
 
-    /**
-     * @description Manages an operator's salary slips. Operators can read their own slips,
-     *              but only administrators can create, update, or delete them.
-     * @path /operators/{operatorId}/salarySlips/{salarySlipId}
-     * @allow (get) An operator `op123` reads their salary slip at `/operators/op123/salarySlips/slip_abc`.
-     * @deny (create) An operator `op123` attempts to create their own salary slip.
-     * @deny (update) An operator `op123` tries to modify their salary slip after it's been issued.
-     * @principle Secures sensitive financial data by separating read access (for the owner) from write access (for admins).
-     */
-    match /operators/{operatorId}/salarySlips/{salarySlipId} {
-      allow get, list: if isAdmin() || isOwner(operatorId);
-      allow create: if isAdmin() && hasCorrectOperatorId(operatorId);
-      allow update: if isAdmin() && resource != null && isOperatorIdImmutable();
-      allow delete: if isAdmin() && resource != null;
-    }
-    
-    /**
-     * @description Manages administrator roles. Only existing admins can view or modify the list of admins.
-     * @path /roles_admin/{uid}
-     * @allow (create) An existing admin adds a new user to the admin roles.
-     * @deny (get) A non-admin user tries to read a document to see if another user is an admin.
-     * @deny (list) A non-admin user attempts to list all administrators.
-     * @principle Protects the integrity of the role-based access system by making it self-managed by admins.
-     */
-    match /roles_admin/{uid} {
-      allow get, list: if isAdmin();
-      allow create, update, delete: if isAdmin();
+    // Rules for other collections (e.g., production data, etc.)
+    // These can be further restricted based on user roles (admin, supervisor, operator).
+    match /{document=**} {
+      allow read, write: if request.auth != null;
     }
   }
 }
