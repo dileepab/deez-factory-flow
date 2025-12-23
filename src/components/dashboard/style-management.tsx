@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Fragment } from 'react';
+import { useState, useEffect, Fragment, useMemo } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import {
@@ -50,6 +50,8 @@ import { useToast } from '@/hooks/use-toast';
 import { GARMENT_STYLES } from '@/lib/data';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 
+const ITEMS_PER_PAGE = 5;
+
 export function StyleManagement() {
   const { toast } = useToast();
   const stylesQuery = useMemoFirebase(
@@ -63,6 +65,7 @@ export function StyleManagement() {
   const [seedAttempted, setSeedAttempted] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedRows, setExpandedRows] = useState<string[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
     if (styles?.length === 0 && !stylesLoading && !seedAttempted) {
@@ -111,6 +114,7 @@ export function StyleManagement() {
     const newStyle = {
       id: `style-${Math.random().toString(36).substring(2, 9)}`,
       name: formData.get('styleName') as string,
+      startDate: formData.get('startDate') as string,
       totalSmv: 0,
       operations: [],
     };
@@ -139,18 +143,31 @@ export function StyleManagement() {
     );
   };
 
-  const filteredStyles = styles?.filter(style =>
+  const sortedStyles = useMemo(() => {
+    if (!styles) return [];
+    return [...styles].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
+  }, [styles]);
+
+  const filteredStyles = sortedStyles.filter(style =>
     style.name.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const paginatedStyles = filteredStyles.slice(
+    (currentPage - 1) * ITEMS_PER_PAGE,
+    currentPage * ITEMS_PER_PAGE
+  );
+
+  const totalPages = Math.ceil(filteredStyles.length / ITEMS_PER_PAGE);
+
+
   return (
     <Card id="styles">
-      <CardHeader className="flex flex-row items-center justify-between">
+      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
         <div>
           <CardTitle>Garment Style Management</CardTitle>
           <CardDescription>View, add, or manage garment styles.</CardDescription>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
         <AlertDialog>
           <AlertDialogTrigger asChild>
             <Button variant="destructive" disabled={isSeeding}>
@@ -196,13 +213,25 @@ export function StyleManagement() {
                     required
                   />
                 </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="startDate" className="text-right">
+                    Start Date
+                  </Label>
+                  <Input
+                    id="startDate"
+                    name="startDate"
+                    type="date"
+                    className="col-span-3"
+                    required
+                  />
+                </div>
                 <Button type="submit">Add Style</Button>
               </form>
             </DialogContent>
           </Dialog>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="overflow-x-auto">
         <div className="flex items-center gap-2 mb-4">
             <Input
             placeholder="Filter styles..."
@@ -215,6 +244,7 @@ export function StyleManagement() {
           <TableHeader>
             <TableRow>
               <TableHead>Style Name</TableHead>
+              <TableHead>Start Date</TableHead>
               <TableHead className="text-center">Operations</TableHead>
               <TableHead className="text-right">Total SMV</TableHead>
               <TableHead className="text-right">Actions</TableHead>
@@ -223,81 +253,103 @@ export function StyleManagement() {
           <TableBody>
             {(stylesLoading || isSeeding) && (
               <TableRow>
-                <TableCell colSpan={4} className="text-center">
-                 <div className="flex justify-center items-center">
-                   <Loader2 className="h-6 w-6 animate-spin text-primary mr-2" />
-                   {isSeeding ? 'Seeding initial data...' : 'Loading styles...'}
-                  </div>
-                </TableCell>
-              </TableRow>
-            )}
-            {filteredStyles?.map(style => (
-              <Fragment key={style.id}>
-                <TableRow>
-                  <TableCell className="font-medium">{style.name}</TableCell>
-                  <TableCell className="text-center">
-                    <Badge variant="secondary">{style.operations.length}</Badge>
-                  </TableCell>
-                  <TableCell className="text-right font-mono">
-                    {style.totalSmv.toFixed(2)}
-                  </TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="ghost" size="sm" onClick={() => toggleRow(style.id)}>
-                        {expandedRows.includes(style.id) ? (
-                            <>
-                                <ChevronDown className="mr-2 h-4 w-4" />
-                                Hide
-                            </>
-                        ) : (
-                            <>
-                                <ChevronRight className="mr-2 h-4 w-4" />
-                                View
-                            </>
-                        )}
-                    </Button>
+                <TableCell colSpan={5} className="text-center">
+                  <div className="flex justify-center items-center">
+                    <Loader2 className="h-6 w-6 animate-spin text-primary mr-2" />
+                    {isSeeding ? 'Seeding initial data...' : 'Loading styles...'}
+                    </div>
                   </TableCell>
                 </TableRow>
-                {expandedRows.includes(style.id) && (
-                    <TableRow className="bg-muted/50">
-                        <TableCell colSpan={4}>
-                            <div className="p-4">
-                                <div className="flex justify-between items-center mb-2">
-                                    <h4 className="font-semibold">Operations for {style.name}</h4>
-                                    <Link href={`/dashboard/styles/${style.id}`} passHref>
-                                        <Button variant="outline" size="sm">
-                                            <Pencil className="mr-2 h-4 w-4" />
-                                            Manage Operations
-                                        </Button>
-                                    </Link>
-                                </div>
-                                <Table>
-                                    <TableHeader>
-                                        <TableRow>
-                                            <TableHead>Operation Name</TableHead>
-                                            <TableHead>Machine Type</TableHead>
-                                            <TableHead className="text-right">Time (s)</TableHead>
-                                        </TableRow>
-                                    </TableHeader>
-                                    <TableBody>
-                                        {style.operations.map(op => (
-                                            <TableRow key={op.id}>
-                                                <TableCell>{op.name}</TableCell>
-                                                <TableCell>
-                                                    <Badge variant="secondary">{op.machineType}</Badge>
-                                                </TableCell>
-                                                <TableCell className="text-right font-mono">{op.time}</TableCell>
-                                            </TableRow>
-                                        ))}
-                                    </TableBody>
-                                </Table>
-                            </div>
-                        </TableCell>
-                    </TableRow>
-                )}
-              </Fragment>
-            ))}
-          </TableBody>
-        </Table>
+              )}
+              {paginatedStyles.map(style => (
+                <Fragment key={style.id}>
+                  <TableRow>
+                    <TableCell className="font-medium">{style.name}</TableCell>
+                    <TableCell>{style.startDate}</TableCell>
+                    <TableCell className="text-center">
+                      <Badge variant="secondary">{style.operations.length}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right font-mono">
+                      {style.totalSmv.toFixed(2)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <Button variant="ghost" size="sm" onClick={() => toggleRow(style.id)}>
+                          {expandedRows.includes(style.id) ? (
+                              <>
+                                  <ChevronDown className="mr-2 h-4 w-4" />
+                                  Hide
+                              </>
+                          ) : (
+                              <>
+                                  <ChevronRight className="mr-2 h-4 w-4" />
+                                  View
+                              </>
+                          )}
+                      </Button>
+                    </TableCell>
+                  </TableRow>
+                  {expandedRows.includes(style.id) && (
+                      <TableRow className="bg-muted/50">
+                          <TableCell colSpan={5}>
+                              <div className="p-4">
+                                  <div className="flex justify-between items-center mb-2">
+                                      <h4 className="font-semibold">Operations for {style.name}</h4>
+                                      <Link href={`/dashboard/styles/${style.id}`} passHref>
+                                          <Button variant="outline" size="sm">
+                                              <Pencil className="mr-2 h-4 w-4" />
+                                              Manage Operations
+                                          </Button>
+                                      </Link>
+                                  </div>
+                                  <Table>
+                                      <TableHeader>
+                                          <TableRow>
+                                              <TableHead>Operation Name</TableHead>
+                                              <TableHead>Machine Type</TableHead>
+                                              <TableHead className="text-right">Time (s)</TableHead>
+                                          </TableRow>
+                                      </TableHeader>
+                                      <TableBody>
+                                          {style.operations.map(op => (
+                                              <TableRow key={op.id}>
+                                                  <TableCell>{op.name}</TableCell>
+                                                  <TableCell>
+                                                      <Badge variant="secondary">{op.machineType}</Badge>
+                                                  </TableCell>
+                                                  <TableCell className="text-right font-mono">{op.time}</TableCell>
+                                              </TableRow>
+                                          ))}
+                                      </TableBody>
+                                  </Table>
+                              </div>
+                          </TableCell>
+                      </TableRow>
+                  )}
+                </Fragment>
+              ))}
+            </TableBody>
+          </Table>
+        <div className="flex items-center justify-end space-x-2 py-4">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+            disabled={currentPage === 1}
+          >
+            Previous
+          </Button>
+          <span className="text-sm">
+            Page {currentPage} of {totalPages}
+          </span>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+            disabled={currentPage === totalPages}
+          >
+            Next
+          </Button>
+        </div>
       </CardContent>
     </Card>
   );

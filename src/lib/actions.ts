@@ -5,7 +5,7 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { auth, db } from '@/firebase/server';
 import { FIREBASE_AUTH_ERRORS } from './constants';
-import type { UserRole, Operator } from './types';
+import { UserRoleSchema, Operator } from './types';
 import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
 import type { EfficiencyImprovementSuggestionsOutput } from '@/ai/flows/efficiency-improvement-suggestions';
 
@@ -14,7 +14,7 @@ const signupSchema = z
     email: z.string().email({ message: 'Please enter a valid email address.' }),
     password: z.string().min(6, { message: 'Password must be at least 6 characters long.' }),
     'confirm-password': z.string(),
-    role: z.enum(['admin', 'supervisor', 'operator']),
+    role: UserRoleSchema,
   })
   .refine((data) => data.password === data['confirm-password'], {
     message: "Passwords don't match.",
@@ -68,7 +68,7 @@ export async function sessionLogin(idToken: string) {
     const expiresIn = 60 * 60 * 24 * 5 * 1000; // 5 days
     const sessionCookie = await auth.createSessionCookie(idToken, { expiresIn });
 
-    cookies().set('__session', sessionCookie, {
+    (await cookies()).set('__session', sessionCookie, {
       maxAge: expiresIn,
       httpOnly: true,
       secure: true,
@@ -86,11 +86,11 @@ export async function sessionLogin(idToken: string) {
 }
 
 export async function sessionLogout() {
-  cookies().delete('__session');
+  (await cookies()).delete('__session');
 }
 
 export async function logout() {
-  const sessionCookie = cookies().get('__session')?.value;
+  const sessionCookie = (await cookies()).get('__session')?.value;
   if (sessionCookie) {
     try {
       const decodedClaims = await auth.verifySessionCookie(sessionCookie);
@@ -100,14 +100,13 @@ export async function logout() {
     }
   }
   await sessionLogout();
-  redirect('/');
 }
 
 export async function getSuggestions(
   productionData: string
 ): Promise<EfficiencyImprovementSuggestionsOutput | { error: string }> {
   try {
-    const suggestions = await getEfficiencyImprovementSuggestions(productionData);
+    const suggestions = await getEfficiencyImprovementSuggestions({ realTimeData: productionData });
     return suggestions;
   } catch (error: any) {
     console.error('Error getting AI suggestions:', error);

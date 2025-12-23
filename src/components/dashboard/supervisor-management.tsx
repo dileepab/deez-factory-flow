@@ -37,7 +37,7 @@ export function SupervisorManagement() {
         <CardTitle>Supervisor Management</CardTitle>
         <CardDescription>View and manage supervisors.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>

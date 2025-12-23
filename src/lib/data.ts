@@ -4,7 +4,8 @@ export const GARMENT_STYLES: GarmentStyle[] = [
   {
     id: 'style-1',
     name: 'Classic Crew Neck T-Shirt',
-    totalSmv: 0, // Will be calculated
+    startDate: '2024-05-01',
+    totalSmv: 210,
     operations: [
       { id: 'op-1-1', name: 'Cut Fabric', time: 15, machineType: 'Single Needle Lockstitch', dependencies: [] },
       { id: 'op-1-2', name: 'Sew Shoulder Seams', time: 25, machineType: 'Overlock/Serger', dependencies: ['op-1-1'] },
@@ -18,7 +19,8 @@ export const GARMENT_STYLES: GarmentStyle[] = [
   {
     id: 'style-2',
     name: 'V-Neck T-Shirt',
-    totalSmv: 0,
+    startDate: '2024-05-15',
+    totalSmv: 220,
     operations: [
       { id: 'op-2-1', name: 'Cut Fabric', time: 15, machineType: 'Single Needle Lockstitch', dependencies: [] },
       { id: 'op-2-2', name: 'Sew Shoulder Seams', time: 25, machineType: 'Overlock/Serger', dependencies: ['op-2-1'] },
@@ -32,7 +34,8 @@ export const GARMENT_STYLES: GarmentStyle[] = [
   {
     id: 'style-3',
     name: 'Polo Shirt',
-    totalSmv: 0,
+    startDate: '2024-06-01',
+    totalSmv: 375,
     operations: [
       { id: 'op-3-1', name: 'Cut Fabric', time: 20, machineType: 'Single Needle Lockstitch', dependencies: [] },
       { id: 'op-3-2', name: 'Create Placket', time: 60, machineType: 'Single Needle Lockstitch', dependencies: ['op-3-1'] },
@@ -46,46 +49,104 @@ export const GARMENT_STYLES: GarmentStyle[] = [
       { id: 'op-3-10', name: 'Final Inspection', time: 25, machineType: 'Single Needle Lockstitch', dependencies: ['op-3-8', 'op-3-9'] },
     ],
   },
+  {
+    id: 'style-4',
+    name: "Men's Formal Shirt",
+    startDate: '2024-06-15',
+    totalSmv: 700,
+    operations: [
+      { id: 'op-4-1', name: 'Cut Body Panels', time: 30, machineType: 'Single Needle Lockstitch', dependencies: [] },
+      { id: 'op-4-2', name: 'Cut Sleeve Panels', time: 20, machineType: 'Single Needle Lockstitch', dependencies: [] },
+      { id: 'op-4-3', name: 'Cut Collar & Cuff Pieces', time: 25, machineType: 'Single Needle Lockstitch', dependencies: [] },
+      { id: 'op-4-4', name: 'Fuse Collar & Cuffs', time: 40, machineType: 'Single Needle Lockstitch', dependencies: ['op-4-3'] },
+      { id: 'op-4-5', name: 'Assemble Collar', time: 60, machineType: 'Single Needle Lockstitch', dependencies: ['op-4-4'] },
+      { id: 'op-4-6', name: 'Assemble Cuffs', time: 70, machineType: 'Double Needle Lockstitch', dependencies: ['op-4-4'] },
+      { id: 'op-4-7', name: 'Attach Front Placket', time: 50, machineType: 'Single Needle Lockstitch', dependencies: ['op-4-1'] },
+      { id: 'op-4-8', name: 'Sew Shoulder Seams', time: 30, machineType: 'Overlock/Serger', dependencies: ['op-4-1', 'op-4-7'] },
+      { id: 'op-4-9', name: 'Attach Collar to Neckline', time: 55, machineType: 'Single Needle Lockstitch', dependencies: ['op-4-5', 'op-4-8'] },
+      { id: 'op-4-10', name: 'Prepare & Attach Sleeves', time: 80, machineType: 'Overlock/Serger', dependencies: ['op-4-2', 'op-4-6', 'op-4-8'] },
+      { id: 'op-4-11', name: 'Sew Side & Sleeve Seams', time: 70, machineType: 'Overlock/Serger', dependencies: ['op-4-10'] },
+      { id: 'op-4-12', name: 'Hem Bottom', time: 40, machineType: 'Flatlock/Coverstitch', dependencies: ['op-4-11'] },
+      { id: 'op-4-13', name: 'Create Buttonholes (Cuffs & Placket)', time: 45, machineType: 'Buttonhole Machine', dependencies: ['op-4-11'] },
+      { id: 'op-4-14', name: 'Attach Buttons (Cuffs & Placket)', time: 50, machineType: 'Button Attach Machine', dependencies: ['op-4-13'] },
+      { id: 'op-4-15', name: 'Final Inspection & Press', time: 35, machineType: 'Single Needle Lockstitch', dependencies: ['op-4-9', 'op-4-12', 'op-4-14'] },
+    ]
+  },
+  {
+      id: 'style-5',
+      name: 'Denim Jeans',
+      startDate: '2024-07-01',
+      totalSmv: 650,
+      operations: [
+        { id: 'op-5-1', name: 'Cut Front & Back Leg Panels', time: 40, machineType: 'Single Needle Lockstitch', dependencies: [] },
+        { id: 'op-5-2', name: 'Attach Back Pockets', time: 60, machineType: 'Double Needle Lockstitch', dependencies: ['op-5-1'] },
+        { id: 'op-5-3', name: 'Attach Front Pockets', time: 55, machineType: 'Single Needle Lockstitch', dependencies: ['op-5-1'] },
+        { id: 'op-5-4', name: 'Join Inseams', time: 70, machineType: 'Overlock/Serger', dependencies: ['op-5-2', 'op-5-3'] },
+        { id: 'op-5-5', name: 'Join Outseams', time: 75, machineType: 'Overlock/Serger', dependencies: ['op-5-4'] },
+        { id: 'op-5-6', name: 'Assemble Fly & Attach Zipper', time: 90, machineType: 'Single Needle Lockstitch', dependencies: ['op-5-5'] },
+        { id: 'op-5-7', name: 'Attach Waistband', time: 80, machineType: 'Waist Band (Kansai)', dependencies: ['op-5-6'] },
+        { id: 'op-5-8', name: 'Make & Attach Belt Loops', time: 60, machineType: 'Single Needle Lockstitch', dependencies: ['op-5-7'] },
+        { id: 'op-5-9', name: 'Hem Leg Bottoms', time: 45, machineType: 'Flatlock/Coverstitch', dependencies: ['op-5-8'] },
+        { id: 'op-5-10', name: 'Create Buttonhole on Waistband', time: 20, machineType: 'Buttonhole Machine', dependencies: ['op-5-9'] },
+        { id: 'op-5-11', name: 'Attach Waistband Button', time: 25, machineType: 'Button Attach Machine', dependencies: ['op-5-10'] },
+        { id: 'op-5-12', name: 'Final Inspection & Wash Prep', time: 30, machineType: 'Single Needle Lockstitch', dependencies: ['op-5-11'] },
+      ]
+  }
 ];
 
 export const OPERATORS: Operator[] = [
     {
       id: 'op-1',
       name: 'John Doe',
+      email: 'john.doe@example.com',
       efficiency: 95.5,
+      earnedMinutes: 0,
+      totalProduction: 150,
+      rework: 5,
       reworkRate: 2.1,
       attendance: 100,
       assignedStyle: 'Classic Crew Neck T-Shirt',
+      line: 'Line 1',
       dailyProductions: [
-        { date: '2024-05-20', quantity: 50 },
-        { date: '2024-05-21', quantity: 52 },
-        { date: '2024-05-22', quantity: 48 },
+        { id: 'op-1-prod-1', operatorId: 'op-1', styleId: 'style-1', date: '2024-05-20', quantity: 50, hoursWorked: 8 },
+        { id: 'op-1-prod-2', operatorId: 'op-1', styleId: 'style-1', date: '2024-05-21', quantity: 52, hoursWorked: 8 },
+        { id: 'op-1-prod-3', operatorId: 'op-1', styleId: 'style-1', date: '2024-05-22', quantity: 48, hoursWorked: 8 },
       ],
     },
     {
       id: 'op-2',
       name: 'Jane Smith',
+      email: 'jane.smith@example.com',
       efficiency: 98.2,
+      earnedMinutes: 0,
+      totalProduction: 180,
+      rework: 3,
       reworkRate: 1.5,
       attendance: 95,
       assignedStyle: 'V-Neck T-Shirt',
+      line: 'Line 2',
       dailyProductions: [
-        { date: '2024-05-20', quantity: 60 },
-        { date: '2024-05-21', quantity: 58 },
-        { date: '2024-05-22', quantity: 62 },
+        { id: 'op-2-prod-1', operatorId: 'op-2', styleId: 'style-2', date: '2024-05-20', quantity: 60, hoursWorked: 8 },
+        { id: 'op-2-prod-2', operatorId: 'op-2', styleId: 'style-2', date: '2024-05-21', quantity: 58, hoursWorked: 8 },
+        { id: 'op-2-prod-3', operatorId: 'op-2', styleId: 'style-2', date: '2024-05-22', quantity: 62, hoursWorked: 8 },
       ],
     },
     {
       id: 'op-3',
       name: 'Peter Jones',
+      email: 'peter.jones@example.com',
       efficiency: 92.0,
+      earnedMinutes: 0,
+      totalProduction: 127,
+      rework: 8,
       reworkRate: 3.0,
       attendance: 98,
       assignedStyle: 'Polo Shirt',
+      line: 'Line 1',
       dailyProductions: [
-        { date: '2024-05-20', quantity: 40 },
-        { date: '2024-05-21', quantity: 45 },
-        { date: '2024-05-22', quantity: 42 },
+        { id: 'op-3-prod-1', operatorId: 'op-3', styleId: 'style-3', date: '2024-05-20', quantity: 40, hoursWorked: 8 },
+        { id: 'op-3-prod-2', operatorId: 'op-3', styleId: 'style-3', date: '2024-05-21', quantity: 45, hoursWorked: 8 },
+        { id: 'op-3-prod-3', operatorId: 'op-3', styleId: 'style-3', date: '2024-05-22', quantity: 42, hoursWorked: 8 },
       ],
     },
 ];

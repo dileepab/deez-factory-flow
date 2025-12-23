@@ -49,7 +49,7 @@ export function OperatorManagement() {
         <CardTitle>Operator Management</CardTitle>
         <CardDescription>View and manage operators.</CardDescription>
       </CardHeader>
-      <CardContent>
+      <CardContent className="overflow-x-auto">
         <Table>
           <TableHeader>
             <TableRow>
