@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import {
@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/alert-dialog"
 
 import { Badge } from '@/components/ui/badge';
-import { PlusCircle, Loader2, RefreshCw } from 'lucide-react';
+import { PlusCircle, Loader2, RefreshCw, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useCollection } from '@/firebase/firestore/use-collection';
@@ -61,6 +61,8 @@ export function StyleManagement() {
   const [open, setOpen] = useState(false);
   const [isSeeding, setIsSeeding] = useState(false);
   const [seedAttempted, setSeedAttempted] = useState(false);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [expandedRows, setExpandedRows] = useState<string[]>([]);
 
   useEffect(() => {
     if (styles?.length === 0 && !stylesLoading && !seedAttempted) {
@@ -78,7 +80,8 @@ export function StyleManagement() {
     });
     try {
       for (const style of GARMENT_STYLES) {
-        const totalSmv = style.operations.reduce((sum, op) => sum + op.time, 0);
+        const totalSmvInSeconds = style.operations.reduce((sum, op) => sum + op.time, 0);
+        const totalSmv = totalSmvInSeconds / 60; // Convert to minutes
         const correctedStyle = { ...style, totalSmv };
 
         const styleRef = doc(firestore, 'styles', style.id);
@@ -130,6 +133,16 @@ export function StyleManagement() {
     }
   };
 
+  const toggleRow = (id: string) => {
+    setExpandedRows(prev =>
+        prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]
+    );
+  };
+
+  const filteredStyles = styles?.filter(style =>
+    style.name.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   return (
     <Card id="styles">
       <CardHeader className="flex flex-row items-center justify-between">
@@ -140,7 +153,7 @@ export function StyleManagement() {
         <div className="flex gap-2">
         <AlertDialog>
           <AlertDialogTrigger asChild>
-            <Button variant="outline" disabled={isSeeding}>
+            <Button variant="destructive" disabled={isSeeding}>
               <RefreshCw className="mr-2 h-4 w-4" /> Re-seed Data
             </Button>
           </AlertDialogTrigger>
@@ -158,7 +171,7 @@ export function StyleManagement() {
           </AlertDialogContent>
         </AlertDialog>
 
-          <Dialog open={open} onOpenChange={setOpen}>
+          <Dialog open={open} onChange={setOpen}>
             <DialogTrigger asChild>
               <Button>
                 <PlusCircle className="mr-2 h-4 w-4" /> Add Style
@@ -190,6 +203,14 @@ export function StyleManagement() {
         </div>
       </CardHeader>
       <CardContent>
+        <div className="flex items-center gap-2 mb-4">
+            <Input
+            placeholder="Filter styles..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            className="max-w-sm"
+            />
+        </div>
         <Table>
           <TableHeader>
             <TableRow>
@@ -210,21 +231,70 @@ export function StyleManagement() {
                 </TableCell>
               </TableRow>
             )}
-            {styles?.map(style => (
-              <TableRow key={style.id}>
-                <TableCell className="font-medium">{style.name}</TableCell>
-                <TableCell className="text-center">
-                  <Badge variant="secondary">{style.operations.length}</Badge>
-                </TableCell>
-                <TableCell className="text-right font-mono">
-                  {style.totalSmv.toFixed(2)}
-                </TableCell>
-                <TableCell className="text-right">
-                  <Link href={`/dashboard/styles/${style.id}`} passHref>
-                    <Button variant="outline" size="sm">Manage</Button>
-                  </Link>
-                </TableCell>
-              </TableRow>
+            {filteredStyles?.map(style => (
+              <Fragment key={style.id}>
+                <TableRow>
+                  <TableCell className="font-medium">{style.name}</TableCell>
+                  <TableCell className="text-center">
+                    <Badge variant="secondary">{style.operations.length}</Badge>
+                  </TableCell>
+                  <TableCell className="text-right font-mono">
+                    {style.totalSmv.toFixed(2)}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="sm" onClick={() => toggleRow(style.id)}>
+                        {expandedRows.includes(style.id) ? (
+                            <>
+                                <ChevronDown className="mr-2 h-4 w-4" />
+                                Hide
+                            </>
+                        ) : (
+                            <>
+                                <ChevronRight className="mr-2 h-4 w-4" />
+                                View
+                            </>
+                        )}
+                    </Button>
+                  </TableCell>
+                </TableRow>
+                {expandedRows.includes(style.id) && (
+                    <TableRow className="bg-muted/50">
+                        <TableCell colSpan={4}>
+                            <div className="p-4">
+                                <div className="flex justify-between items-center mb-2">
+                                    <h4 className="font-semibold">Operations for {style.name}</h4>
+                                    <Link href={`/dashboard/styles/${style.id}`} passHref>
+                                        <Button variant="outline" size="sm">
+                                            <Pencil className="mr-2 h-4 w-4" />
+                                            Manage Operations
+                                        </Button>
+                                    </Link>
+                                </div>
+                                <Table>
+                                    <TableHeader>
+                                        <TableRow>
+                                            <TableHead>Operation Name</TableHead>
+                                            <TableHead>Machine Type</TableHead>
+                                            <TableHead className="text-right">Time (s)</TableHead>
+                                        </TableRow>
+                                    </TableHeader>
+                                    <TableBody>
+                                        {style.operations.map(op => (
+                                            <TableRow key={op.id}>
+                                                <TableCell>{op.name}</TableCell>
+                                                <TableCell>
+                                                    <Badge variant="secondary">{op.machineType}</Badge>
+                                                </TableCell>
+                                                <TableCell className="text-right font-mono">{op.time}</TableCell>
+                                            </TableRow>
+                                        ))}
+                                    </TableBody>
+                                </Table>
+                            </div>
+                        </TableCell>
+                    </TableRow>
+                )}
+              </Fragment>
             ))}
           </TableBody>
         </Table>

@@ -1,28 +1,16 @@
-export type UserRole = "admin" | "supervisor" | "operator";
+import { MACHINE_TYPES } from './constants';
 
-export interface User {
+export type Operation = {
   id: string;
   name: string;
-  role: UserRole;
-  email: string;
-  avatarUrl: string;
-  // Operator fields
-  efficiency?: number; // as a percentage
-  earnedMinutes?: number;
-  totalProduction?: number;
-  rework?: number;
-  targetSalary?: number;
-  attendanceBonus?: number;
-}
+  time: number; // in seconds
+  machineType: typeof MACHINE_TYPES[number];
+  dependencies: string[];
+};
 
-export interface GarmentStyleOperation {
-  name: string;
-  smv: number; // Standard Minute Value
-}
-
-export interface GarmentStyle {
+export type GarmentStyle = {
   id: string;
   name: string;
-  operations: GarmentStyleOperation[];
-  totalSmv: number;
-}
+  operations: Operation[];
+  totalSmv: number; // in minutes
+};
