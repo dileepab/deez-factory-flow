@@ -23,19 +23,23 @@ export function SalarySlip({ operator }: { operator: Operator }) {
     <Card id="earnings" className="w-full max-w-md mx-auto">
       <CardHeader>
         <CardTitle>Today's Estimated Earnings</CardTitle>
-        <CardDescription>Based on your performance today, {currentDate}</CardDescription>
+        <CardDescription>Based on your performance on {currentDate}</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="flex justify-between items-center">
-          <span className="text-muted-foreground">Base Pay Component</span>
+          <span className="text-muted-foreground">Guaranteed Base Pay</span>
           <span>{formatCurrency(earnings.basePay)}</span>
         </div>
         <div className="flex justify-between items-center">
-          <span className="text-muted-foreground">Piece Rate Earnings (Efficiency based)</span>
-          <span>{formatCurrency(earnings.pieceRateEarnings)}</span>
+          <span className="text-muted-foreground">Incentive Pay (up to 100% eff.)</span>
+          <span>{formatCurrency(earnings.incentivePay)}</span>
         </div>
         <div className="flex justify-between items-center">
-          <span className="text-muted-foreground">Attendance Bonus Portion</span>
+          <span className="text-muted-foreground">Efficiency Bonus (over 100% eff.)</span>
+          <span className="text-green-500 font-semibold">{formatCurrency(earnings.bonusPay)}</span>
+        </div>
+        <div className="flex justify-between items-center">
+          <span className="text-muted-foreground">Attendance Bonus</span>
           <span>{formatCurrency(earnings.attendanceBonus)}</span>
         </div>
         <Separator />

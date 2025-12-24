@@ -21,7 +21,7 @@ import { Loader2 } from 'lucide-react';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import { collection, query, where } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
-import type { User } from '@/lib/types';
+import type { AnyUser } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { promoteToSupervisor } from '@/lib/actions';
 
@@ -31,7 +31,7 @@ export function OperatorManagement() {
     []
   );
   const { data: operators, isLoading: operatorsLoading } =
-    useCollection<User>(operatorsQuery);
+    useCollection<AnyUser>(operatorsQuery);
 
   const handlePromote = async (userId: string) => {
     try {

@@ -17,7 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/shared/page-header';
 import { Loader } from '@/components/loader';
-import type { Style, Operation } from '@/lib/types';
+import type { GarmentStyle, GarmentOperation } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { MACHINE_TYPES } from '@/lib/constants';
 import { Badge } from '@/components/ui/badge';
@@ -31,14 +31,14 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
     () => doc(firestore, 'styles', styleId),
     [styleId]
   );
-  const { data: style, isLoading, error } = useDoc<Style>(styleRef);
+  const { data: style, isLoading, error } = useDoc<GarmentStyle>(styleRef);
 
   const [newOperation, setNewOperation] = useState('');
   const [newOperationTime, setNewOperationTime] = useState('');
   const [newMachineType, setNewMachineType] = useState<typeof MACHINE_TYPES[number] | ''>( '');
   const [newDependencies, setNewDependencies] = useState<string[]>([]);
   const [isAdding, setIsAdding] = useState(false);
-  const [editingOperation, setEditingOperation] = useState<{ op: Operation; index: number } | null>(null);
+  const [editingOperation, setEditingOperation] = useState<{ op: GarmentOperation; index: number } | null>(null);
   const [isUpdating, setIsUpdating] = useState(false);
 
   const resetForm = () => {
@@ -61,9 +61,9 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
           throw "Document does not exist!";
         }
 
-        const currentStyle = styleDoc.data() as Style;
+        const currentStyle = styleDoc.data() as GarmentStyle;
         const currentOperations = currentStyle.operations || [];
-        const newOperationData: Operation = { 
+        const newOperationData: GarmentOperation = { 
           id: nanoid(),
           name: newOperation, 
           time: parseInt(newOperationTime, 10), 
@@ -72,7 +72,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
         };
 
         const newOperations = [...currentOperations, newOperationData];
-        const totalSmvInSeconds = newOperations.reduce((sum, op) => sum + op.time, 0);
+        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.time, 0);
         const newTotalSmv = totalSmvInSeconds / 60; // Convert to minutes
 
         transaction.update(styleRef, {
@@ -89,7 +89,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
     }
   };
 
-  const handleStartEdit = (op: Operation, index: number) => {
+  const handleStartEdit = (op: GarmentOperation, index: number) => {
     setEditingOperation({ op, index });
     setNewOperation(op.name);
     setNewOperationTime(String(op.time));
@@ -115,10 +115,10 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
           throw "Document does not exist!";
         }
 
-        const currentStyle = styleDoc.data() as Style;
+        const currentStyle = styleDoc.data() as GarmentStyle;
         const currentOperations = currentStyle.operations || [];
         
-        const updatedOperation: Operation = {
+        const updatedOperation: GarmentOperation = {
           ...editingOperation.op,
           name: newOperation,
           time: parseInt(newOperationTime, 10),
@@ -129,7 +129,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
         const newOperations = [...currentOperations];
         newOperations[editingOperation.index] = updatedOperation;
 
-        const totalSmvInSeconds = newOperations.reduce((sum, op) => sum + op.time, 0);
+        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.time, 0);
         const newTotalSmv = totalSmvInSeconds / 60; // Convert to minutes
 
         transaction.update(styleRef, {
@@ -145,7 +145,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
     }
   };
 
-  const handleRemoveOperation = async (operationToRemove: Operation) => {
+  const handleRemoveOperation = async (operationToRemove: GarmentOperation) => {
     try {
       await runTransaction(firestore, async (transaction) => {
         const styleDoc = await transaction.get(styleRef);
@@ -153,11 +153,11 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
           throw "Document does not exist!";
         }
 
-        const currentStyle = styleDoc.data() as Style;
+        const currentStyle = styleDoc.data() as GarmentStyle;
         const currentOperations = currentStyle.operations || [];
         
         const indexToRemove = currentOperations.findIndex(
-          op => op.id === operationToRemove.id
+          (op: GarmentOperation) => op.id === operationToRemove.id
         );
         
         if (indexToRemove === -1) {
@@ -168,7 +168,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
         newOperations.splice(indexToRemove, 1);
         
         // Also remove this operation from any other operations' dependencies
-        newOperations.forEach(op => {
+        newOperations.forEach((op: GarmentOperation) => {
           if (op.dependencies) {
             const depIndex = op.dependencies.indexOf(operationToRemove.id);
             if (depIndex !== -1) {
@@ -177,7 +177,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
           }
         });
 
-        const totalSmvInSeconds = newOperations.reduce((sum, op) => sum + op.time, 0);
+        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.time, 0);
         const newTotalSmv = totalSmvInSeconds / 60; // Convert to minutes
 
         transaction.update(styleRef, {
@@ -192,7 +192,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
 
   const isProcessing = isAdding || isUpdating;
 
-  const operationOptions: Option[] = style?.operations.map(op => ({ value: op.id, label: op.name })) || [];
+  const operationOptions: Option[] = style?.operations.map((op: GarmentOperation) => ({ value: op.id, label: op.name })) || [];
 
   if (isLoading) {
     return <Loader />;
@@ -277,7 +277,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
           )}
 
           <ul className="space-y-2 mt-6">
-            {(style.operations || []).map((op, index) => (
+            {(style.operations || []).map((op: GarmentOperation, index: number) => (
               <li key={op.id} className="flex items-center justify-between p-3 bg-gray-100 rounded-md dark:bg-gray-800">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:gap-4">
                   <span className="font-semibold">{op.name}</span>
@@ -287,8 +287,8 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
                     <div className="flex items-center gap-2 mt-2 sm:mt-0">
                       <span className="text-sm font-semibold">Depends on:</span>
                       <div className="flex flex-wrap gap-1">
-                        {op.dependencies.map(depId => {
-                          const depOp = style.operations.find(o => o.id === depId);
+                        {op.dependencies.map((depId: string) => {
+                          const depOp = style.operations.find((o: GarmentOperation) => o.id === depId);
                           return depOp ? (
                             <Badge key={depId} variant="secondary">{depOp.name}</Badge>
                           ) : null;

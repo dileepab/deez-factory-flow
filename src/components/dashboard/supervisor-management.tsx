@@ -20,7 +20,7 @@ import { Loader2 } from 'lucide-react';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import { collection, query, where } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
-import type { User } from '@/lib/types';
+import type { AnyUser } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 
 export function SupervisorManagement() {
@@ -29,7 +29,7 @@ export function SupervisorManagement() {
     []
   );
   const { data: supervisors, isLoading: supervisorsLoading } =
-    useCollection<User>(supervisorsQuery);
+    useCollection<AnyUser>(supervisorsQuery);
 
   return (
     <Card id="supervisors">

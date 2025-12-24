@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
-import { auth, db } from '@/firebase/server';
+import { auth, firestore } from '@/firebase/server';
 import { FIREBASE_AUTH_ERRORS } from './constants';
 import { UserRoleSchema, Operator } from './types';
 import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
@@ -47,7 +47,7 @@ export async function signup(prevState: any, formData: FormData) {
 
     await auth.setCustomUserClaims(user.uid, { role });
 
-    await db.collection('users').doc(user.uid).set({
+    await firestore.collection('users').doc(user.uid).set({
       email,
       role,
     });
@@ -106,7 +106,10 @@ export async function getSuggestions(
   productionData: string
 ): Promise<EfficiencyImprovementSuggestionsOutput | { error: string }> {
   try {
-    const suggestions = await getEfficiencyImprovementSuggestions({ realTimeData: productionData });
+    const suggestions = await getEfficiencyImprovementSuggestions({
+      realTimeData: productionData,
+      language: ''
+    });
     return suggestions;
   } catch (error: any) {
     console.error('Error getting AI suggestions:', error);
@@ -119,7 +122,7 @@ export async function getSuggestions(
 export async function promoteToSupervisor(userId: string) {
   try {
     await auth.setCustomUserClaims(userId, { role: 'supervisor' });
-    await db.collection('users').doc(userId).update({ role: 'supervisor' });
+    await firestore.collection('users').doc(userId).update({ role: 'supervisor' });
   } catch (error: any) {
     console.error('Error promoting user to supervisor:', error);
     throw new Error('Failed to promote user');

@@ -94,7 +94,7 @@ export function LoginForm() {
                 />
               </FormControl>
               <FormMessage />
-            </To olItem>
+            </FormItem>
           )}
         />
         <Button type="submit" className="w-full" disabled={form.formState.isSubmitting}>

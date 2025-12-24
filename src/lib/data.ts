@@ -6,6 +6,7 @@ export const GARMENT_STYLES: GarmentStyle[] = [
     name: 'Classic Crew Neck T-Shirt',
     startDate: '2024-05-01',
     totalSmv: 210,
+    quantity: 1000,
     operations: [
       { id: 'op-1-1', name: 'Cut Fabric', time: 15, machineType: 'Single Needle Lockstitch', dependencies: [] },
       { id: 'op-1-2', name: 'Sew Shoulder Seams', time: 25, machineType: 'Overlock/Serger', dependencies: ['op-1-1'] },
@@ -21,6 +22,7 @@ export const GARMENT_STYLES: GarmentStyle[] = [
     name: 'V-Neck T-Shirt',
     startDate: '2024-05-15',
     totalSmv: 220,
+    quantity: 1000,
     operations: [
       { id: 'op-2-1', name: 'Cut Fabric', time: 15, machineType: 'Single Needle Lockstitch', dependencies: [] },
       { id: 'op-2-2', name: 'Sew Shoulder Seams', time: 25, machineType: 'Overlock/Serger', dependencies: ['op-2-1'] },
@@ -36,6 +38,7 @@ export const GARMENT_STYLES: GarmentStyle[] = [
     name: 'Polo Shirt',
     startDate: '2024-06-01',
     totalSmv: 375,
+    quantity: 1000,
     operations: [
       { id: 'op-3-1', name: 'Cut Fabric', time: 20, machineType: 'Single Needle Lockstitch', dependencies: [] },
       { id: 'op-3-2', name: 'Create Placket', time: 60, machineType: 'Single Needle Lockstitch', dependencies: ['op-3-1'] },
@@ -54,6 +57,7 @@ export const GARMENT_STYLES: GarmentStyle[] = [
     name: "Men's Formal Shirt",
     startDate: '2024-06-15',
     totalSmv: 700,
+    quantity: 1000,
     operations: [
       { id: 'op-4-1', name: 'Cut Body Panels', time: 30, machineType: 'Single Needle Lockstitch', dependencies: [] },
       { id: 'op-4-2', name: 'Cut Sleeve Panels', time: 20, machineType: 'Single Needle Lockstitch', dependencies: [] },
@@ -77,6 +81,7 @@ export const GARMENT_STYLES: GarmentStyle[] = [
       name: 'Denim Jeans',
       startDate: '2024-07-01',
       totalSmv: 650,
+      quantity: 1000,
       operations: [
         { id: 'op-5-1', name: 'Cut Front & Back Leg Panels', time: 40, machineType: 'Single Needle Lockstitch', dependencies: [] },
         { id: 'op-5-2', name: 'Attach Back Pockets', time: 60, machineType: 'Double Needle Lockstitch', dependencies: ['op-5-1'] },
@@ -107,11 +112,7 @@ export const OPERATORS: Operator[] = [
       attendance: 100,
       assignedStyle: 'Classic Crew Neck T-Shirt',
       line: 'Line 1',
-      dailyProductions: [
-        { id: 'op-1-prod-1', operatorId: 'op-1', styleId: 'style-1', date: '2024-05-20', quantity: 50, hoursWorked: 8 },
-        { id: 'op-1-prod-2', operatorId: 'op-1', styleId: 'style-1', date: '2024-05-21', quantity: 52, hoursWorked: 8 },
-        { id: 'op-1-prod-3', operatorId: 'op-1', styleId: 'style-1', date: '2024-05-22', quantity: 48, hoursWorked: 8 },
-      ],
+      dailyProductions: [],
     },
     {
       id: 'op-2',
@@ -125,11 +126,7 @@ export const OPERATORS: Operator[] = [
       attendance: 95,
       assignedStyle: 'V-Neck T-Shirt',
       line: 'Line 2',
-      dailyProductions: [
-        { id: 'op-2-prod-1', operatorId: 'op-2', styleId: 'style-2', date: '2024-05-20', quantity: 60, hoursWorked: 8 },
-        { id: 'op-2-prod-2', operatorId: 'op-2', styleId: 'style-2', date: '2024-05-21', quantity: 58, hoursWorked: 8 },
-        { id: 'op-2-prod-3', operatorId: 'op-2', styleId: 'style-2', date: '2024-05-22', quantity: 62, hoursWorked: 8 },
-      ],
+      dailyProductions: [],
     },
     {
       id: 'op-3',
@@ -143,10 +140,6 @@ export const OPERATORS: Operator[] = [
       attendance: 98,
       assignedStyle: 'Polo Shirt',
       line: 'Line 1',
-      dailyProductions: [
-        { id: 'op-3-prod-1', operatorId: 'op-3', styleId: 'style-3', date: '2024-05-20', quantity: 40, hoursWorked: 8 },
-        { id: 'op-3-prod-2', operatorId: 'op-3', styleId: 'style-3', date: '2024-05-21', quantity: 45, hoursWorked: 8 },
-        { id: 'op-3-prod-3', operatorId: 'op-3', styleId: 'style-3', date: '2024-05-22', quantity: 42, hoursWorked: 8 },
-      ],
+      dailyProductions: [],
     },
 ];

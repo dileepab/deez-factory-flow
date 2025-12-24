@@ -47,7 +47,7 @@ export function SignupForm() {
 
   async function onSubmit(values: z.infer<typeof formSchema>) {
     try {
-      await signUp(values.email, values.password, values.name, 'operator');
+      await signUp(values.email, values.password, values.name);
       toast({
         title: 'Account Created',
         description: 'You have successfully created an account.',

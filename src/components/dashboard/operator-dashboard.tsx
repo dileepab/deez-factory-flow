@@ -15,7 +15,7 @@ export function OperatorDashboard() {
   const { user, loading: isUserLoading } = useAuth();
 
   const operatorRef = useMemo(
-    () => (user ? doc(firestore, "operators", user.uid) : null),
+    () => (user ? doc(firestore, "users", user.uid) : null),
     [user]
   );
   
@@ -40,10 +40,10 @@ export function OperatorDashboard() {
         description="Here's a summary of your performance today."
       />
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Efficiency" value={`${operator.efficiency}%`} icon={Target} description="Target: 85%" />
-        <StatCard title="Earned Minutes" value={String(operator.earnedMinutes)} icon={BarChart} description="vs 480 available" />
-        <StatCard title="Total Production" value={`${operator.totalProduction} pcs`} icon={Package} />
-        <StatCard title="Rework" value={`${operator.rework} pcs`} icon={AlertTriangle} />
+        <StatCard title="Efficiency" value={`${operator.efficiency || 0}%`} icon={Target} description="Target: 85%" />
+        <StatCard title="Earned Minutes" value={String(Math.round(operator.earnedMinutes || 0))} icon={BarChart} description="vs 480 available" />
+        <StatCard title="Total Operations" value={`${operator.totalOperations || 0} pcs`} icon={Package} />
+        <StatCard title="Rework" value={`${operator.rework || 0} pcs`} icon={AlertTriangle} />
       </div>
       <div className="mt-6">
         <SalarySlip operator={operator} />

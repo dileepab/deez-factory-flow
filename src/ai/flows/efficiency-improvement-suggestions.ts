@@ -14,6 +14,7 @@ import {z} from 'genkit';
 const EfficiencyImprovementSuggestionsInputSchema = z.object({
   realTimeData: z.string().describe('Real-time production data including operator efficiency, rework quantities, and production quantities.'),
   historicalData: z.string().optional().describe('Historical production data for comparison.'),
+  language: z.string().optional().default('English').describe('The language for the AI-powered suggestions.'),
 });
 export type EfficiencyImprovementSuggestionsInput = z.infer<typeof EfficiencyImprovementSuggestionsInputSchema>;
 
@@ -35,13 +36,13 @@ const prompt = ai.definePrompt({
   output: {schema: EfficiencyImprovementSuggestionsOutputSchema},
   prompt: `You are an AI assistant providing expert advice to factory supervisors on improving operator efficiency and optimizing production flow.
 
-  Analyze the following real-time production data and provide actionable suggestions to the supervisor.
+  Analyze the following real-time production data and provide actionable suggestions to the supervisor in {{language}}.
 
   Real-time Data: {{{realTimeData}}}
 
   Historical Data (if available): {{#if historicalData}}{{{historicalData}}}{{else}}Not available{{/if}}
 
-  Based on this data, provide a list of suggestions for the supervisor, and explain your reasoning.
+  Based on this data, provide a list of suggestions for the supervisor, and explain your reasoning in {{language}}.
   Format the suggestions as a numbered list.
   The suggestions should be specific, measurable, achievable, relevant, and time-bound (SMART).
   Return the suggestions in the "suggestions" field and the reasoning in the "reasoning" field.

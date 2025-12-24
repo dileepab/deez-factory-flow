@@ -4,7 +4,7 @@ import { useAuth } from '@/auth-provider';
 import { UserRole } from '@/lib/types';
 import { PageHeader } from '@/components/shared/page-header';
 import { Leaderboard } from '@/components/dashboard/leaderboard';
-import { AiSuggestions } from '@/components/dashboard/ai-suggestions';
+import { AISuggestions } from '@/components/dashboard/ai-suggestions';
 import { StyleManagement } from '@/components/dashboard/style-management';
 import { ProductionEntry } from '@/components/dashboard/production-entry';
 import { OperatorDashboard } from '@/components/dashboard/operator-dashboard';
@@ -45,41 +45,54 @@ export default function DashboardPage() {
   const role = userData?.role;
 
   if (!role) {
-    // This can happen briefly while the user doc is being created for a new user.
-    // The AuthProvider will handle the user state, so just show a loader.
     return <Loader />;
   }
 
   return (
     <div>
-      <PageHeader title={`Welcome, ${role}`} />
-      <div className="mt-6 grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-        {role === 'operator' && <OperatorDashboard />}
-        {role !== 'operator' && (
+      <PageHeader title={`Welcome, ${user?.displayName || role}`} />
+      <div className="mt-6 grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+
+        {role === 'operator' && (
+            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
+                <OperatorDashboard />
+            </div>
+        )}
+
+        {role === 'supervisor' && (
           <>
-            <div className="lg:col-span-2">
+            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-2">
+              <ProductionEntry />
+            </div>
+            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-2">
+              <AISuggestions />
+            </div>
+            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
+              <ProductionLog />
+            </div>
+            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
               <Leaderboard />
             </div>
-            <AiSuggestions />
           </>
         )}
+
         {role === 'admin' && (
           <>
-            <StyleManagement />
-            <OperatorManagement />
-            <SupervisorManagement />
+            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
+                <Leaderboard />
+            </div>
+            <div className="col-span-1 md:col-span-2">
+                <StyleManagement />
+            </div>
+            <div className="col-span-1">
+                <OperatorManagement />
+            </div>
+            <div className="col-span-1">
+                <SupervisorManagement />
+            </div>
           </>
         )}
-        {role === 'supervisor' && (
-            <>
-                <div className="lg:col-span-1">
-                    <ProductionEntry />
-                </div>
-                <div className="lg:col-span-2">
-                    <ProductionLog />
-                </div>
-            </>
-        )}
+
       </div>
     </div>
   );

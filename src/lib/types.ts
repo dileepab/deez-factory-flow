@@ -1,76 +1,74 @@
-import { z } from 'zod';
+import { Timestamp } from "firebase/firestore";
+import { z } from "zod";
+import { MACHINE_TYPES } from "./constants";
 
-// Base user schema
-export const UserSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  email: z.string().email(),
-});
+// Define the schema for validation
+export const UserRoleSchema = z.enum(["admin", "supervisor", "operator"]);
 
-// Schema for user roles
-export const UserRoleSchema = z.enum(['admin', 'supervisor', 'operator']);
+// Infer the type from the schema
 export type UserRole = z.infer<typeof UserRoleSchema>;
 
-// Schema for garment operations
-export const GarmentOperationSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  machineType: z.string(),
-  time: z.number(), // in seconds
-  dependencies: z.array(z.string()).optional(),
-});
-export type GarmentOperation = z.infer<typeof GarmentOperationSchema>;
+// Create a specific type for machine types from the constant
+export type MachineType = typeof MACHINE_TYPES[number];
 
-// Schema for garment styles
-export const GarmentStyleSchema = z.object({
-  id: z.string(),
-  name: z.string(),
-  startDate: z.string(),
-  totalSmv: z.number(),
-  operations: z.array(GarmentOperationSchema),
-});
-export type GarmentStyle = z.infer<typeof GarmentStyleSchema>;
+export interface User {
+  id: string;
+  name?: string;
+  email?: string;
+  role?: UserRole;
+}
 
-// Schema for production logs
-export const ProductionLogSchema = z.object({
-  id: z.string(),
-  operatorId: z.string(),
-  styleId: z.string(),
-  quantity: z.number(),
-  hoursWorked: z.number(),
-  date: z.string(), // ISO 8601 format
-});
-export type ProductionLog = z.infer<typeof ProductionLogSchema>;
+export interface Operator extends User {
+  role: "operator";
+  efficiency: number;
+  earnedMinutes: number;
+  totalOperations: number; // Corrected from totalProduction
+  rework: number;
+  reworkRate: number;
+  attendance: number;
+  assignedStyle?: string;
+  line?: string;
+  dailyProductions?: {
+    date: Timestamp;
+    totalOperations: number;
+    earnedMinutes: number;
+    efficiency: number;
+  }[];
+}
 
-// Extended user schema for operators
-export const OperatorSchema = UserSchema.extend({
-  efficiency: z.number(),
-  earnedMinutes: z.number(),
-  totalProduction: z.number(),
-  rework: z.number(),
-  reworkRate: z.number(),
-  attendance: z.number(),
-  assignedStyle: z.string().optional(),
-  line: z.string().optional(),
-  dailyProductions: z.array(ProductionLogSchema).optional(),
-});
-export type Operator = z.infer<typeof OperatorSchema>;
+export interface Supervisor extends User {
+  role: "supervisor";
+  line: string;
+  operators: string[]; // array of operator IDs
+}
 
-// You can also create a union type for different user profiles if needed
-export const AnyUserSchema = z.union([
-  UserSchema.extend({ role: z.literal('admin') }),
-  UserSchema.extend({ role: z.literal('supervisor') }),
-  OperatorSchema.extend({ role: z.literal('operator') }),
-]);
-export type AnyUser = z.infer<typeof AnyUserSchema>;
+export interface GarmentOperation {
+  id: string;
+  name: string;
+  time: number; // in seconds
+  machineType: MachineType; // Use the specific type
+  dependencies?: string[]; // array of operation IDs
+}
 
-// Schema for AI-powered suggestions
-export const SuggestionSchema = z.object({
-  id: z.number(),
-  text: z.string(),
-  action: z.string(),
-});
+export interface GarmentStyle {
+  id: string;
+  name: string;
+  totalSmv: number;
+  quantity: number;
+  startDate: string;
+  status: "active" | "completed";
+  operations: GarmentOperation[];
+}
 
-export const EfficiencyImprovementSuggestionsOutputSchema = z.array(SuggestionSchema);
-
-export type EfficiencyImprovementSuggestionsOutput = z.infer<typeof EfficiencyImprovementSuggestionsOutputSchema>;
+export interface ProductionEntry {
+  id: string;
+  operatorId: string;
+  operatorName: string;
+  styleId: string;
+  operationId: string;
+  operationName: string;
+  hourlyRange: string;
+  cumulativeQuantity: number;
+  reworkQuantity?: number;
+  timestamp: Timestamp;
+}

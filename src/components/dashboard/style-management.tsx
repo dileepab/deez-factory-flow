@@ -39,7 +39,7 @@ import {
 } from "@/components/ui/alert-dialog"
 
 import { Badge } from '@/components/ui/badge';
-import { PlusCircle, Loader2, RefreshCw, ChevronDown, ChevronRight, Pencil } from 'lucide-react';
+import { PlusCircle, Loader2, RefreshCw, ChevronDown, ChevronRight, Pencil, CheckCircle, XCircle } from 'lucide-react';
 import { Input } from '../ui/input';
 import { Label } from '../ui/label';
 import { useCollection } from '@/firebase/firestore/use-collection';
@@ -49,6 +49,7 @@ import type { GarmentStyle } from '@/lib/types';
 import { useToast } from '@/hooks/use-toast';
 import { GARMENT_STYLES } from '@/lib/data';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
+import { StyleProgress } from './style-progress';
 
 const ITEMS_PER_PAGE = 5;
 
@@ -64,6 +65,7 @@ export function StyleManagement() {
   const [isSeeding, setIsSeeding] = useState(false);
   const [seedAttempted, setSeedAttempted] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('active');
   const [expandedRows, setExpandedRows] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
 
@@ -85,7 +87,7 @@ export function StyleManagement() {
       for (const style of GARMENT_STYLES) {
         const totalSmvInSeconds = style.operations.reduce((sum, op) => sum + op.time, 0);
         const totalSmv = totalSmvInSeconds / 60; // Convert to minutes
-        const correctedStyle = { ...style, totalSmv };
+        const correctedStyle = { ...style, totalSmv, quantity: 1000, status: 'active' as const };
 
         const styleRef = doc(firestore, 'styles', style.id);
         await setDoc(styleRef, correctedStyle);
@@ -115,8 +117,10 @@ export function StyleManagement() {
       id: `style-${Math.random().toString(36).substring(2, 9)}`,
       name: formData.get('styleName') as string,
       startDate: formData.get('startDate') as string,
+      quantity: parseInt(formData.get('quantity') as string, 10),
       totalSmv: 0,
       operations: [],
+      status: 'active' as const,
     };
 
     try {
@@ -137,6 +141,26 @@ export function StyleManagement() {
     }
   };
 
+  const handleUpdateStyleStatus = async (styleId: string, status: 'active' | 'completed') => {
+    if (!firestore) return;
+
+    try {
+      const styleRef = doc(firestore, 'styles', styleId);
+      await setDoc(styleRef, { status }, { merge: true });
+      toast({
+        title: 'Style Status Updated',
+        description: `Successfully set style to ${status}`,
+      });
+    } catch (error) {
+      console.error('Error updating style status: ', error);
+      toast({
+        variant: 'destructive',
+        title: 'Error',
+        description: 'Failed to update style status. Please try again.',
+      });
+    }
+  }
+
   const toggleRow = (id: string) => {
     setExpandedRows(prev =>
         prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]
@@ -148,9 +172,15 @@ export function StyleManagement() {
     return [...styles].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
   }, [styles]);
 
-  const filteredStyles = sortedStyles.filter(style =>
-    style.name.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const filteredStyles = useMemo(() => {
+    return sortedStyles.filter(style => {
+        const searchTermMatch = style.name.toLowerCase().includes(searchTerm.toLowerCase());
+        if (statusFilter === 'all') {
+            return searchTermMatch;
+        }
+        return searchTermMatch && (style.status || 'active') === statusFilter;
+    });
+}, [sortedStyles, searchTerm, statusFilter]);
 
   const paginatedStyles = filteredStyles.slice(
     (currentPage - 1) * ITEMS_PER_PAGE,
@@ -188,7 +218,7 @@ export function StyleManagement() {
           </AlertDialogContent>
         </AlertDialog>
 
-          <Dialog open={open} onChange={setOpen}>
+          <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger asChild>
               <Button>
                 <PlusCircle className="mr-2 h-4 w-4" /> Add Style
@@ -225,6 +255,19 @@ export function StyleManagement() {
                     required
                   />
                 </div>
+                <div className="grid grid-cols-4 items-center gap-4">
+                  <Label htmlFor="quantity" className="text-right">
+                    Quantity
+                  </Label>
+                  <Input
+                    id="quantity"
+                    name="quantity"
+                    type="number"
+                    className="col-span-3"
+                    required
+                    defaultValue="1000"
+                  />
+                </div>
                 <Button type="submit">Add Style</Button>
               </form>
             </DialogContent>
@@ -232,28 +275,35 @@ export function StyleManagement() {
         </div>
       </CardHeader>
       <CardContent className="overflow-x-auto">
-        <div className="flex items-center gap-2 mb-4">
+        <div className="flex flex-wrap items-center gap-4 mb-4">
             <Input
-            placeholder="Filter styles..."
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="max-w-sm"
+                placeholder="Filter styles..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="max-w-sm"
             />
+            <div className="flex items-center gap-2">
+                <Button variant={statusFilter === 'all' ? 'secondary' : 'outline'} size="sm" onClick={() => setStatusFilter('all')}>All</Button>
+                <Button variant={statusFilter === 'active' ? 'secondary' : 'outline'} size="sm" onClick={() => setStatusFilter('active')}>Active</Button>
+                <Button variant={statusFilter === 'completed' ? 'secondary' : 'outline'} size="sm" onClick={() => setStatusFilter('completed')}>Completed</Button>
+            </div>
         </div>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>Style Name</TableHead>
+              <TableHead>Style</TableHead>
               <TableHead>Start Date</TableHead>
-              <TableHead className="text-center">Operations</TableHead>
-              <TableHead className="text-right">Total SMV</TableHead>
+              <TableHead>Quantity</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-center">Ops</TableHead>
+              <TableHead className="text-right">SMV</TableHead>
               <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {(stylesLoading || isSeeding) && (
               <TableRow>
-                <TableCell colSpan={5} className="text-center">
+                <TableCell colSpan={7} className="text-center">
                   <div className="flex justify-center items-center">
                     <Loader2 className="h-6 w-6 animate-spin text-primary mr-2" />
                     {isSeeding ? 'Seeding initial data...' : 'Loading styles...'}
@@ -266,6 +316,12 @@ export function StyleManagement() {
                   <TableRow>
                     <TableCell className="font-medium">{style.name}</TableCell>
                     <TableCell>{style.startDate}</TableCell>
+                    <TableCell>{style.quantity}</TableCell>
+                    <TableCell>
+                        <Badge variant={style.status === 'completed' ? 'outline' : 'default'}>
+                            {style.status}
+                        </Badge>
+                    </TableCell>
                     <TableCell className="text-center">
                       <Badge variant="secondary">{style.operations.length}</Badge>
                     </TableCell>
@@ -290,17 +346,32 @@ export function StyleManagement() {
                   </TableRow>
                   {expandedRows.includes(style.id) && (
                       <TableRow className="bg-muted/50">
-                          <TableCell colSpan={5}>
-                              <div className="p-4">
-                                  <div className="flex justify-between items-center mb-2">
-                                      <h4 className="font-semibold">Operations for {style.name}</h4>
-                                      <Link href={`/dashboard/styles/${style.id}`} passHref>
-                                          <Button variant="outline" size="sm">
-                                              <Pencil className="mr-2 h-4 w-4" />
-                                              Manage Operations
-                                          </Button>
-                                      </Link>
+                          <TableCell colSpan={7}>
+                              <div className="p-4 grid gap-4">
+                                  <div className="flex justify-between items-center">
+                                    <h4 className="font-semibold">Progress for {style.name}</h4>
+                                    <div className="flex items-center gap-2">
+                                        <Link href={`/dashboard/styles/${style.id}`} passHref>
+                                            <Button variant="outline" size="sm">
+                                                <Pencil className="mr-2 h-4 w-4" />
+                                                Manage Operations
+                                            </Button>
+                                        </Link>
+                                        {style.status === 'active' ? (
+                                            <Button variant="outline" size="sm" onClick={() => handleUpdateStyleStatus(style.id, 'completed') }>
+                                                <CheckCircle className="mr-2 h-4 w-4" />
+                                                Mark as Complete
+                                            </Button>
+                                        ) : (
+                                            <Button variant="outline" size="sm" onClick={() => handleUpdateStyleStatus(style.id, 'active') }>
+                                                <XCircle className="mr-2 h-4 w-4" />
+                                                Re-open Style
+                                            </Button>
+                                        )}
+                                    </div>
                                   </div>
+                                  <StyleProgress style={style} />
+                                  <h4 className="font-semibold mt-4">Operations for {style.name}</h4>
                                   <Table>
                                       <TableHeader>
                                           <TableRow>

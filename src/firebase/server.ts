@@ -1,24 +1,24 @@
-import { initializeApp, getApps, cert, ServiceAccount } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-import { getFirestore } from 'firebase-admin/firestore';
+import { initializeApp, getApps, cert } from "firebase-admin/app";
+import { getFirestore } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
 
-// IMPORTANT: Do not use this file in the client side of your app.
-
-const credentialsBase64 = process.env.FIREBASE_CREDENTIALS_BASE64;
-
-if (!credentialsBase64) {
-  throw new Error('The FIREBASE_CREDENTIALS_BASE64 environment variable is not set.');
+// Check if the app is already initialized to prevent errors
+if (!getApps().length) {
+  try {
+    // The service account key provides all the necessary configuration
+    initializeApp({
+      credential: cert(JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_KEY!)),
+    });
+    console.log("Firebase Admin SDK initialized successfully.");
+  } catch (error) {
+    console.error("Error initializing Firebase Admin SDK:", error);
+    // If initialization fails, you might want to handle it gracefully
+    // For now, we'll log the error and subsequent operations will likely fail.
+  }
 }
 
-// Decode the Base64 string into a JSON string
-const credentialsJson = Buffer.from(credentialsBase64, 'base64').toString('utf8');
-const serviceAccount: ServiceAccount = JSON.parse(credentialsJson);
+// Export firestore and auth instances
+const firestore = getFirestore();
+const auth = getAuth();
 
-if (getApps().length === 0) {
-  initializeApp({
-    credential: cert(serviceAccount),
-  });
-}
-
-export const auth = getAuth();
-export const db = getFirestore();
+export { firestore, auth };
