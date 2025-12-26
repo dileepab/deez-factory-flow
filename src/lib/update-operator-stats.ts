@@ -1,6 +1,7 @@
 import { firestore } from '@/firebase/server';
 import { Timestamp } from 'firebase-admin/firestore';
 import type { ProductionEntry, GarmentStyle } from '@/lib/types';
+import { AVAILABLE_MINUTES_PER_DAY } from './constants'; // Import the constant
 
 // Helper to get the start of the day for a given date
 const getStartOfDay = (date: Date) => {
@@ -43,34 +44,48 @@ export async function updateOperatorStats(operatorId: string, date: Date) {
   }
 
   const allOperations = styles.flatMap(s => s.operations || []);
+  const earnedMinutesByStyle: { [key: string]: number } = {};
 
   // 3. Calculate stats
   let totalEarnedMinutes = 0;
-  let totalOperations = 0; // Correctly named
+  let totalOperations = 0;
   let totalRework = 0;
 
   for (const entry of productions) {
     const operation = allOperations.find(op => op.id === entry.operationId);
     if (operation && operation.time) {
         const smvInSeconds = operation.time;
-        // Correctly convert SMV from seconds to minutes for the calculation
-        totalEarnedMinutes += (entry.cumulativeQuantity || 0) * (smvInSeconds / 60);
+        const earnedMinutesForEntry = (entry.cumulativeQuantity || 0) * (smvInSeconds / 60);
+
+        totalEarnedMinutes += earnedMinutesForEntry;
+        earnedMinutesByStyle[entry.styleId] = (earnedMinutesByStyle[entry.styleId] || 0) + earnedMinutesForEntry;
     }
     totalOperations += entry.cumulativeQuantity || 0;
     totalRework += entry.reworkQuantity || 0;
   }
 
-  // 4. Update the operator's document in the correct collection
-  const operatorRef = firestore.collection('users').doc(operatorId);
-  const batch = firestore.batch();
+  // 4. Calculate equivalent garments produced
+  let equivalentGarments = 0;
+  for (const styleId in earnedMinutesByStyle) {
+    const style = styles.find(s => s.id === styleId);
+    if (style && style.totalSmv > 0) {
+        // totalSmv is in minutes, earnedMinutesByStyle is in minutes
+        equivalentGarments += earnedMinutesByStyle[styleId] / style.totalSmv;
+    }
+  }
+  
+  // 5. Calculate efficiency
+  const efficiency = AVAILABLE_MINUTES_PER_DAY > 0 ? (totalEarnedMinutes / AVAILABLE_MINUTES_PER_DAY) * 100 : 0;
 
-  batch.set(operatorRef, {
+  // 6. Update the operator's document
+  const operatorRef = firestore.collection('users').doc(operatorId);
+  await operatorRef.set({
     earnedMinutes: totalEarnedMinutes,
-    totalOperations: totalOperations, // Correctly named
+    totalOperations: totalOperations,
     rework: totalRework,
+    equivalentGarments: equivalentGarments,
+    efficiency: Math.round(efficiency), // Save the calculated efficiency
   }, { merge: true });
 
-  await batch.commit();
-
-  return { success: true, totalEarnedMinutes, totalOperations };
+  return { success: true, totalEarnedMinutes, totalOperations, equivalentGarments, efficiency };
 }

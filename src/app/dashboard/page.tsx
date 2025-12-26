@@ -3,7 +3,7 @@
 import { useAuth } from '@/auth-provider';
 import { UserRole } from '@/lib/types';
 import { PageHeader } from '@/components/shared/page-header';
-import { Leaderboard } from '@/components/dashboard/leaderboard';
+import { OperatorLeaderboard } from '@/components/dashboard/leaderboard';
 import { AISuggestions } from '@/components/dashboard/ai-suggestions';
 import { StyleManagement } from '@/components/dashboard/style-management';
 import { ProductionEntry } from '@/components/dashboard/production-entry';
@@ -71,7 +71,7 @@ export default function DashboardPage() {
               <ProductionLog />
             </div>
             <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
-              <Leaderboard />
+              <OperatorLeaderboard />
             </div>
           </>
         )}
@@ -79,7 +79,7 @@ export default function DashboardPage() {
         {role === 'admin' && (
           <>
             <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
-                <Leaderboard />
+                <OperatorLeaderboard />
             </div>
             <div className="col-span-1 md:col-span-2">
                 <StyleManagement />

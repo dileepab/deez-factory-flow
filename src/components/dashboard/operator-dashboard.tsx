@@ -7,7 +7,7 @@ import { firestore } from "@/firebase/client";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { SalarySlip } from "@/components/dashboard/salary-slip";
-import { Target, BarChart, Package, AlertTriangle, Loader2 } from "lucide-react";
+import { Target, BarChart, Package, AlertTriangle, Loader2, ClipboardList } from "lucide-react";
 import type { Operator } from "@/lib/types";
 import { useMemo } from "react";
 
@@ -39,10 +39,12 @@ export function OperatorDashboard() {
         title={`Welcome, ${operator.name}!`}
         description="Here's a summary of your performance today."
       />
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+      {/* Adjusted grid for 5 items */}
+      <div className="grid gap-6 md:grid-cols-3 lg:grid-cols-5">
         <StatCard title="Efficiency" value={`${operator.efficiency || 0}%`} icon={Target} description="Target: 85%" />
         <StatCard title="Earned Minutes" value={String(Math.round(operator.earnedMinutes || 0))} icon={BarChart} description="vs 480 available" />
-        <StatCard title="Total Operations" value={`${operator.totalOperations || 0} pcs`} icon={Package} />
+        <StatCard title="Total Operations" value={`${operator.totalOperations || 0}`} icon={ClipboardList} description="Individual tasks completed" />
+        <StatCard title="Equivalent Garments" value={`${(operator.equivalentGarments || 0).toFixed(2)}`} icon={Package} description="Full garments worth of work"/>
         <StatCard title="Rework" value={`${operator.rework || 0} pcs`} icon={AlertTriangle} />
       </div>
       <div className="mt-6">

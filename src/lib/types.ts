@@ -15,14 +15,18 @@ export interface User {
   id: string;
   name?: string;
   email?: string;
+  photoURL?: string; // Add photoURL for user avatars
   role?: UserRole;
+  // The efficiency field is added to the user document by the server.
+  efficiency?: number;
 }
 
 export interface Operator extends User {
   role: "operator";
   efficiency: number;
   earnedMinutes: number;
-  totalOperations: number; // Corrected from totalProduction
+  totalOperations: number;
+  equivalentGarments: number; // New field for equivalent garments produced
   rework: number;
   reworkRate: number;
   attendance: number;
@@ -35,6 +39,11 @@ export interface Operator extends User {
     efficiency: number;
   }[];
 }
+
+// This type is used in the leaderboard component.
+export type OperatorWithEfficiency = User & {
+  efficiency: number;
+};
 
 export interface Supervisor extends User {
   role: "supervisor";

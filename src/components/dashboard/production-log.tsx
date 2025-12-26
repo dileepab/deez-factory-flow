@@ -47,11 +47,29 @@ export function ProductionLog() {
 
   const { data: productionEntries, isLoading } = useCollection<ProductionEntryType>(productionQuery);
 
+  // Helper function to trigger stat recalculation
+  const triggerStatsUpdate = async (operatorId: string) => {
+    try {
+      const response = await fetch('/api/update-stats', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ operatorId, date: selectedDate.toISOString() }),
+      });
+      if (!response.ok) throw new Error('Failed to trigger stats update');
+      toast({ title: 'Stats Recalculated', description: "The operator's daily statistics have been updated." });
+    } catch (error) {
+      console.error('Error triggering stats update:', error);
+      toast({ variant: 'destructive', title: 'Stat Update Failed', description: 'Could not recalculate operator stats.' });
+    }
+  };
+
   const handleDelete = async () => {
     if (!firestore || !entryToDelete) return;
     try {
       await deleteDoc(doc(firestore, 'production', entryToDelete.id));
       toast({ title: 'Entry Deleted', description: 'The production log has been removed.' });
+      // Trigger stats update after deleting
+      await triggerStatsUpdate(entryToDelete.operatorId);
     } catch (error) {
       console.error('Error deleting document: ', error);
       toast({ variant: 'destructive', title: 'Error', description: 'Could not delete the entry.' });
@@ -74,6 +92,8 @@ export function ProductionLog() {
       const entryRef = doc(firestore, 'production', entryToEdit.id);
       await updateDoc(entryRef, { cumulativeQuantity: quantity });
       toast({ title: 'Entry Updated', description: 'The production quantity has been updated.' });
+      // Trigger stats update after editing
+      await triggerStatsUpdate(entryToEdit.operatorId);
     } catch (error) {
       console.error('Error updating document: ', error);
       toast({ variant: 'destructive', title: 'Error', description: 'Could not update the entry.' });
