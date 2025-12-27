@@ -9,55 +9,54 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { CalendarIcon, Save } from "lucide-react";
+import { Save } from "lucide-react";
 import { useCollection } from "@/firebase/firestore/use-collection";
 import { firestore } from "@/firebase/client";
-import { collection, addDoc, query, where, Timestamp } from "firebase/firestore";
+import { collection, query, where } from "firebase/firestore";
 import type { User, GarmentStyle } from "@/lib/types";
 import { useMemoFirebase } from "@/firebase/use-memo-firebase";
 import { useMemo } from "react";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
-import { format } from "date-fns";
-import { Calendar } from "@/components/ui/calendar";
 
 const timeSlots = [
-  "07:30 - 08:30",
-  "08:30 - 09:30",
-  "09:30 - 10:15",
-  "10:30 - 11:30",
-  "11:30 - 12:30",
-  "12:30 - 13:00",
-  "13:30 - 14:30",
-  "14:30 - 15:15",
-  "15:30 - 16:30",
-  "16:30 - 17:30",
-  "17:30 - 18:30",
-  "18:30 - 19:30",
-  "19:30 - 20:30",
-  "20:30 - 21:30",
+  "07:30 - 08:30", // 60 mins
+  "08:30 - 09:30", // 60 mins
+  "09:30 - 10:15", // 45 mins
+  "10:30 - 11:30", // 60 mins
+  "11:30 - 12:30", // 60 mins
+  "12:30 - 13:00", // 30 mins
+  "13:30 - 14:30", // 60 mins
+  "14:30 - 15:15", // 45 mins
+  "15:30 - 16:30", // 60 mins
+  "16:30 - 17:30", // 60 mins
+  "17:30 - 18:30", // 60 mins
+  "18:30 - 19:30", // 60 mins
+  "19:30 - 20:30", // 60 mins
+  "20:30 - 21:30", // 60 mins
 ];
 
+// Updated schema to match our new, leaner API endpoint.
 const productionSchema = z.object({
-  date: z.date(),
   operatorId: z.string().min(1, "Please select an operator."),
   styleId: z.string().min(1, "Please select a style."),
   operationId: z.string().min(1, "Please select an operation."),
-  hourlyRange: z.string().min(1, "Please select an hourly range."),
-  cumulativeQuantity: z.coerce.number().min(1, "Quantity must be at least 1."),
-  reworkQuantity: z.coerce.number().min(0, "Rework quantity cannot be negative.").optional().default(0),
+  hourlyRange: z.string().min(1, "Please select a time slot."),
+  quantity: z.coerce.number().min(1, "Quantity must be at least 1."),
+  reworkQuantity: z.coerce.number().min(0, "Rework cannot be negative.").optional().default(0),
 });
 
+// Helper to calculate the duration of a time slot in minutes.
 const getDurationInMinutes = (range: string): number => {
   if (!range) return 0;
   try {
     const [start, end] = range.split(' - ');
     const [startH, startM] = start.split(':').map(Number);
     const [endH, endM] = end.split(':').map(Number);
-    const startDate = new Date(2000, 0, 1, startH, startM, 0);
-    const endDate = new Date(2000, 0, 1, endH, endM, 0);
+    // Create dates on the same day to calculate the difference
+    const startDate = new Date(0, 0, 0, startH, startM, 0);
+    const endDate = new Date(0, 0, 0, endH, endM, 0);
     return (endDate.getTime() - startDate.getTime()) / (1000 * 60);
   } catch (e) {
+    console.error("Could not calculate duration for range:", range);
     return 0;
   }
 };
@@ -68,21 +67,19 @@ export function ProductionEntry() {
   const form = useForm<z.infer<typeof productionSchema>>({
     resolver: zodResolver(productionSchema),
     defaultValues: {
-      date: new Date(),
       operatorId: "",
       styleId: "",
       operationId: "",
       hourlyRange: "",
-      cumulativeQuantity: undefined,
+      quantity: undefined,
       reworkQuantity: 0,
     },
   });
   
   const selectedStyleId = form.watch("styleId");
-  const selectedHourlyRange = form.watch("hourlyRange");
 
   const operatorsQuery = useMemoFirebase(
-    () => firestore ? query(collection(firestore, 'users'), where('role', '==', 'operator')) : null,
+    () => firestore ? query(collection(firestore, 'users'), where('role', '==', 'operator')) : null, 
     []
   );
   const { data: operators, isLoading: operatorsLoading } = useCollection<User>(operatorsQuery);
@@ -98,48 +95,50 @@ export function ProductionEntry() {
 
 
   async function onSubmit(values: z.infer<typeof productionSchema>) {
-    if (!firestore) return;
     try {
-      const productionEntriesRef = collection(firestore, 'production');
-      
       const operatorName = operators?.find(op => op.id === values.operatorId)?.name || 'Unknown Operator';
-      const operationName = operations?.find(op => op.id === values.operationId)?.name || 'Unknown Operation';
 
-      const { date, hourlyRange } = values;
-      const [startTime] = hourlyRange.split(' - ');
-      const [hours, minutes] = startTime.split(':').map(Number);
+      // 1. Calculate worked minutes from the selected time slot.
+      const workedMinutes = getDurationInMinutes(values.hourlyRange);
+      if (workedMinutes <= 0) {
+        throw new Error("Invalid time range selected.");
+      }
 
-      const finalTimestamp = new Date(date);
-      finalTimestamp.setHours(hours, minutes, 0, 0);
+      // 2. Prepare the payload for our new, correct API endpoint.
+      const apiPayload = {
+        operatorId: values.operatorId,
+        styleId: values.styleId,
+        operationId: values.operationId,
+        quantity: values.quantity,
+        reworkQuantity: values.reworkQuantity,
+        workedMinutes: workedMinutes,
+      };
 
-      await addDoc(productionEntriesRef, {
-        ...values,
-        operatorName,
-        operationName,
-        timestamp: Timestamp.fromDate(finalTimestamp),
-      });
-
-      toast({
-        title: "Production Logged",
-        description: `Successfully logged ${values.cumulativeQuantity} units for ${operatorName} on ${format(date, 'PPP')}.`,
-      });
-
-      // Trigger the backend to update stats
-      await fetch('/api/update-stats', {
+      // 3. Call the new backend endpoint to log production.
+      const response = await fetch('/api/log-production', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          operatorId: values.operatorId,
-          date: values.date.toISOString(), // Send date in ISO format
-        }),
+        body: JSON.stringify(apiPayload),
       });
+
+      const result = await response.json();
+
+      if (!response.ok) {
+        throw new Error(result.message || "An unknown error occurred.");
+      }
       
+      // 4. Show success toast and reset the form for the next entry.
+      toast({
+        title: "Production Logged",
+        description: `Successfully logged ${values.quantity} units for ${operatorName}.`,
+      });
+
       form.reset({
         ...values,
         operationId: "",
-        cumulativeQuantity: undefined,
+        quantity: undefined,
         reworkQuantity: 0,
       });
 
@@ -148,7 +147,7 @@ export function ProductionEntry() {
        toast({
         variant: "destructive",
         title: "Error",
-        description: "Failed to log production data. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to log production data.",
       });
     }
   }
@@ -158,67 +157,26 @@ export function ProductionEntry() {
       <CardHeader>
         <CardTitle>Hourly Production Entry</CardTitle>
         <CardDescription>
-          Select the date, operator, style, and time before choosing an operation.
+          Log production data for an operator for a specific time slot.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-              <FormField
-                control={form.control}
-                name="date"
-                render={({ field }) => (
-                  <FormItem className="flex flex-col">
-                    <FormLabel>Production Date</FormLabel>
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <FormControl>
-                          <Button
-                            variant={"outline"}
-                            className={cn(
-                              "w-[240px] pl-3 text-left font-normal",
-                              !field.value && "text-muted-foreground"
-                            )}
-                          >
-                            {field.value ? (
-                              format(field.value, "PPP")
-                            ) : (
-                              <span>Pick a date</span>
-                            )}
-                            <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
-                          </Button>
-                        </FormControl>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <Calendar
-                          mode="single"
-                          selected={field.value}
-                          onSelect={field.onChange}
-                          disabled={(date) => date > new Date() || date < new Date("2023-01-01")}
-                          initialFocus
-                        />
-                      </PopoverContent>
-                    </Popover>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
             <FormField
               control={form.control}
               name="operatorId"
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Operator</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value} disabled={operatorsLoading || !operators || operators.length === 0}>
+                  <Select onValueChange={field.onChange} value={field.value} disabled={operatorsLoading}>
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder={operatorsLoading ? "Loading operators..." : (operators && operators.length > 0 ? "Select an operator" : "No operators found")} />
+                        <SelectValue placeholder={operatorsLoading ? "Loading..." : "Select an operator"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {operators?.map(op => (
-                        <SelectItem key={op.id} value={op.id}>{op.name || op.id}</SelectItem>
-                      ))}
+                      {operators?.map(op => <SelectItem key={op.id} value={op.id}>{op.name || op.id}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -237,45 +195,35 @@ export function ProductionEntry() {
                       form.setValue('operationId', '');
                     }} 
                     value={field.value} 
-                    disabled={stylesLoading || !styles || styles.length === 0}
+                    disabled={stylesLoading}
                   >
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder={stylesLoading ? "Loading styles..." : (styles && styles.length > 0 ? "Select a style" : "No active styles found")} />
+                        <SelectValue placeholder={stylesLoading ? "Loading..." : "Select a style"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                       {styles?.map(style => (
-                        <SelectItem key={style.id} value={style.id}>{style.name}</SelectItem>
-                      ))}
+                       {styles?.map(style => <SelectItem key={style.id} value={style.id}>{style.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <FormMessage />
                 </FormItem>
               )}
             />
-            <FormField
+             <FormField
               control={form.control}
               name="hourlyRange"
               render={({ field }) => (
                 <FormItem>
-                  <FormLabel>Hourly Range</FormLabel>
-                  <Select 
-                     onValueChange={(value) => {
-                      field.onChange(value);
-                      form.setValue('operationId', '');
-                    }} 
-                    value={field.value}
-                  >
+                  <FormLabel>Time Slot</FormLabel>
+                  <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder="Select a time slot" />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {timeSlots.map(slot => (
-                        <SelectItem key={slot} value={slot}>{slot}</SelectItem>
-                      ))}
+                      {timeSlots.map(slot => <SelectItem key={slot} value={slot}>{slot}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -288,23 +236,14 @@ export function ProductionEntry() {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Operation</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value} disabled={!selectedStyleId || !selectedHourlyRange || operations.length === 0}>
+                  <Select onValueChange={field.onChange} value={field.value} disabled={!selectedStyleId || operations.length === 0}>
                     <FormControl>
                       <SelectTrigger>
-                        <SelectValue placeholder={!selectedStyleId ? "First select a style" : (!selectedHourlyRange ? "Next, select an hourly range" : "Select an operation")} />
+                        <SelectValue placeholder={!selectedStyleId ? "First select a style" : "Select an operation"} />
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {operations.map(op => {
-                        const duration = getDurationInMinutes(selectedHourlyRange);
-                        const smv = parseFloat(op.time as any);
-                        const targetQuantity = duration > 0 && smv > 0 ? Math.floor((duration * 60) / smv) : 0;
-                        return (
-                          <SelectItem key={op.id} value={op.id}>
-                            {op.name} - {targetQuantity}
-                          </SelectItem>
-                        );
-                      })}
+                      {operations.map(op => <SelectItem key={op.id} value={op.id}>{op.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <FormMessage />
@@ -314,12 +253,12 @@ export function ProductionEntry() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <FormField
                 control={form.control}
-                name="cumulativeQuantity"
+                name="quantity"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Cumulative Quantity</FormLabel>
+                    <FormLabel>Quantity Produced</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="e.g., 150" {...field} value={field.value ?? ""} />
+                      <Input type="number" placeholder="e.g., 50" {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>
@@ -332,7 +271,7 @@ export function ProductionEntry() {
                   <FormItem>
                     <FormLabel>Rework Quantity</FormLabel>
                     <FormControl>
-                      <Input type="number" placeholder="e.g., 5" {...field} value={field.value ?? ""} />
+                      <Input type="number" placeholder="e.g., 2" {...field} value={field.value ?? ""} />
                     </FormControl>
                     <FormMessage />
                   </FormItem>

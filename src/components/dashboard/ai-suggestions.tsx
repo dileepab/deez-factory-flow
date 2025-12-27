@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Loader2, Lightbulb, AlertTriangle } from 'lucide-react';
@@ -16,22 +16,29 @@ export function AISuggestions() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Fetch production data from the last 24 hours to use as context for the AI
   const productionQuery = useMemoFirebase(() => {
     if (!firestore) return null;
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const oneDayAgo = new Date();
+    oneDayAgo.setDate(oneDayAgo.getDate() - 1);
     return query(
       collection(firestore, 'production'),
-      where('timestamp', '>=', Timestamp.fromDate(startOfDay))
+      where('timestamp', '>=', Timestamp.fromDate(oneDayAgo))
     );
-  }, []);
+  }, [firestore]);
 
   const { data: productionEntries, isLoading: dataLoading } = useCollection<ProductionEntry>(productionQuery);
 
   const fetchSuggestions = async () => {
-    if (!productionEntries || productionEntries.length === 0) {
-      setSuggestions(null);
+    if (!productionEntries) {
+      setError('නිෂ්පාදන දත්ත තවමත් ලබා ගත නොහැක. කරුණාකර පසුව නැවත උත්සාහ කරන්න.');
       return;
+    }
+
+    if (productionEntries.length === 0) {
+        setError('AI සඳහා විශ්ලේෂණය කිරීමට තරම් මෑත කාලීන නිෂ්පාදන දත්ත නොමැත.');
+        setSuggestions(null);
+        return;
     }
 
     setIsLoading(true);
@@ -49,12 +56,54 @@ export function AISuggestions() {
     }
   };
 
-  useEffect(() => {
-    if (productionEntries) {
-      fetchSuggestions();
+  const renderContent = () => {
+    if (isLoading) {
+      return (
+        <div className="flex items-center justify-center h-40">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+          <p className="ml-3 text-muted-foreground">AI යෝජනා ජනනය කරමින්... (මෙයට තත්පර 30ක් පමණ ගත විය හැක)</p>
+        </div>
+      );
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [productionEntries]);
+
+    if (error) {
+      return (
+        <div className="flex flex-col items-center justify-center h-40 text-center">
+          <AlertTriangle className="h-8 w-8 text-destructive mb-2" />
+          <p className="text-destructive font-semibold">දෝෂයක් ඇතිවිය</p>
+          <p className="text-sm text-destructive mb-4">{error}</p>
+          <Button onClick={fetchSuggestions}>නැවත උත්සාහ කරන්න</Button>
+        </div>
+      );
+    }
+
+    if (suggestions) {
+      return (
+        <div>
+          <h4 className="font-semibold mb-2">යෝජනා:</h4>
+          <ul className="list-disc pl-5 space-y-1 text-sm">
+            {suggestions.suggestions.map((suggestion, index) => (
+              <li key={index}>{suggestion}</li>
+            ))}
+          </ul>
+          <h4 className="font-semibold mt-4 mb-2">හේතු දැක්වීම:</h4>
+          <p className="text-sm text-muted-foreground">{suggestions.reasoning}</p>
+          <Button onClick={fetchSuggestions} className="mt-6 w-full">නව යෝජනා ජනනය කරන්න</Button>
+        </div>
+      );
+    }
+
+    return (
+        <div className="flex flex-col items-center justify-center h-40 text-center">
+            <Lightbulb className="h-8 w-8 text-primary mb-2" />
+            <p className="text-muted-foreground mb-4">නිෂ්පාදන කාර්යක්ෂමතාව වැඩි දියුණු කිරීම සඳහා AI බලයෙන් ක්‍රියාත්මක වන යෝජනා ලබා ගන්න.</p>
+            <Button onClick={fetchSuggestions} disabled={dataLoading}>
+                {dataLoading && <Loader2 className="h-4 w-4 animate-spin mr-2" />}
+                {dataLoading ? 'නිෂ්පාදන දත්ත ලබා ගනිමින්...' : 'යෝජනා ජනනය කරන්න'}
+            </Button>
+        </div>
+    );
+  };
 
   return (
     <Card>
@@ -63,42 +112,7 @@ export function AISuggestions() {
         <CardDescription>නිෂ්පාදන කාර්යක්ෂමතාව වැඩි දියුණු කිරීම සඳහා ක්‍රියාකාරී උපදෙස්.</CardDescription>
       </CardHeader>
       <CardContent>
-        {(isLoading || dataLoading) && (
-          <div className="flex items-center justify-center h-40">
-            <Loader2 className="h-8 w-8 animate-spin text-primary" />
-            <p className="ml-2 text-muted-foreground">දත්ත විශ්ලේෂණය කරමින්...</p>
-          </div>
-        )}
-
-        {!isLoading && !dataLoading && error && (
-            <div className="flex flex-col items-center justify-center h-40 text-center">
-                <AlertTriangle className="h-8 w-8 text-destructive mb-2" />
-                <p className="text-destructive">{error}</p>
-                <Button onClick={fetchSuggestions} className="mt-4">නැවත උත්සාහ කරන්න</Button>
-            </div>
-        )}
-
-        {!isLoading && !error && !suggestions && (
-           <div className="flex flex-col items-center justify-center h-40 text-center">
-                <Lightbulb className="h-8 w-8 text-muted-foreground mb-2" />
-                <p className="text-muted-foreground">තවම යෝජනා නොමැත.</p>
-                <p className="text-xs text-muted-foreground">තවත් නිෂ්පාදන දත්ත සඳහා රැඳී සිටින්න.</p>
-            </div>
-        )}
-
-        {!isLoading && !error && suggestions && (
-          <div>
-            <h4 className="font-semibold mb-2">යෝජනා:</h4>
-            <ul className="list-disc pl-5 space-y-1 text-sm">
-              {suggestions.suggestions.map((suggestion, index) => (
-                <li key={index}>{suggestion}</li>
-              ))}
-            </ul>
-            <h4 className="font-semibold mt-4 mb-2">හේතු දැක්වීම:</h4>
-            <p className="text-sm text-muted-foreground">{suggestions.reasoning}</p>
-            <Button onClick={fetchSuggestions} className="mt-4 w-full">යෝජනා නැවුම් කරන්න</Button>
-          </div>
-        )}
+        {renderContent()}
       </CardContent>
     </Card>
   );
