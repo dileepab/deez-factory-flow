@@ -1,10 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import { firestore } from '@/firebase/client';
-import { collection, query, orderBy, where, doc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
-import { ProductionEntry as ProductionEntryType } from '@/lib/types';
+import { collection, query, where, doc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
+import type { ProductionEntry as ProductionEntryType, User, GarmentStyle } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -20,34 +20,70 @@ import { Calendar } from "@/components/ui/calendar";
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 
+interface EnrichedProductionEntry extends ProductionEntryType {
+  operatorName: string;
+  operationName: string;
+}
+
+// Helper function to extract the start time from a range like "07:30 - 08:30"
+const getStartTime = (range: string = '') => {
+  if (!range) return '00:00';
+  return range.split('-')[0].trim();
+};
+
 export function ProductionLog() {
   const { toast } = useToast();
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
 
-  const [entryToDelete, setEntryToDelete] = useState<ProductionEntryType | null>(null);
-  const [entryToEdit, setEntryToEdit] = useState<ProductionEntryType | null>(null);
+  const [entryToDelete, setEntryToDelete] = useState<EnrichedProductionEntry | null>(null);
+  const [entryToEdit, setEntryToEdit] = useState<EnrichedProductionEntry | null>(null);
   const [newQuantity, setNewQuantity] = useState<string>("");
 
   const productionQuery = useMemoFirebase(() => {
     if (!firestore) return null;
-
     const startOfDay = new Date(selectedDate);
     startOfDay.setHours(0, 0, 0, 0);
-
     const endOfDay = new Date(selectedDate);
     endOfDay.setHours(23, 59, 59, 999);
-
     return query(
       collection(firestore, 'production'),
       where('timestamp', '>=', Timestamp.fromDate(startOfDay)),
-      where('timestamp', '<=', Timestamp.fromDate(endOfDay)),
-      orderBy('timestamp', 'desc')
+      where('timestamp', '<=', Timestamp.fromDate(endOfDay))
+      // We can no longer sort by timestamp, as we need to sort by the time range string.
     );
   }, [selectedDate]);
 
-  const { data: productionEntries, isLoading } = useCollection<ProductionEntryType>(productionQuery);
+  const { data: productionEntries, isLoading: entriesLoading } = useCollection<ProductionEntryType>(productionQuery);
+  const { data: operators, isLoading: operatorsLoading } = useCollection<User>(useMemoFirebase(() => firestore ? collection(firestore, 'users') : null, []));
+  const { data: styles, isLoading: stylesLoading } = useCollection<GarmentStyle>(useMemoFirebase(() => firestore ? collection(firestore, 'styles') : null, []));
 
-  // Helper function to trigger stat recalculation
+  const enrichedProductionEntries = useMemo<EnrichedProductionEntry[]>(() => {
+    if (!productionEntries || !operators || !styles) return [];
+
+    const allOperations = styles.flatMap(s => s.operations || []);
+
+    const enriched = productionEntries.map(entry => {
+      const operator = operators.find(op => op.id === entry.operatorId);
+      const operation = allOperations.find(op => op.id === entry.operationId);
+      return {
+        ...entry,
+        operatorName: operator?.name ?? 'Unknown Operator',
+        operationName: operation?.name ?? 'Unknown Operation',
+      };
+    });
+
+    // Sort the entries based on the start time of their hourlyRange.
+    enriched.sort((a, b) => {
+        const startTimeA = getStartTime(a.hourlyRange);
+        const startTimeB = getStartTime(b.hourlyRange);
+        return startTimeA.localeCompare(startTimeB);
+    });
+
+    return enriched;
+  }, [productionEntries, operators, styles]);
+
+  const isLoading = entriesLoading || operatorsLoading || stylesLoading;
+
   const triggerStatsUpdate = async (operatorId: string) => {
     try {
       const response = await fetch('/api/update-stats', {
@@ -68,7 +104,6 @@ export function ProductionLog() {
     try {
       await deleteDoc(doc(firestore, 'production', entryToDelete.id));
       toast({ title: 'Entry Deleted', description: 'The production log has been removed.' });
-      // Trigger stats update after deleting
       await triggerStatsUpdate(entryToDelete.operatorId);
     } catch (error) {
       console.error('Error deleting document: ', error);
@@ -92,7 +127,6 @@ export function ProductionLog() {
       const entryRef = doc(firestore, 'production', entryToEdit.id);
       await updateDoc(entryRef, { cumulativeQuantity: quantity });
       toast({ title: 'Entry Updated', description: 'The production quantity has been updated.' });
-      // Trigger stats update after editing
       await triggerStatsUpdate(entryToEdit.operatorId);
     } catch (error) {
       console.error('Error updating document: ', error);
@@ -138,7 +172,7 @@ export function ProductionLog() {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Time</TableHead>
+                <TableHead>Time Range</TableHead>
                 <TableHead>Operator</TableHead>
                 <TableHead>Operation</TableHead>
                 <TableHead>Quantity</TableHead>
@@ -156,16 +190,16 @@ export function ProductionLog() {
                   </TableCell>
                 </TableRow>
               )}
-              {!isLoading && (!productionEntries || productionEntries.length === 0) && (
+              {!isLoading && enrichedProductionEntries.length === 0 && (
                 <TableRow>
                     <TableCell colSpan={5} className="text-center text-muted-foreground h-24">
                         No production has been logged for {format(selectedDate, "PPP")}.
                     </TableCell>
                 </TableRow>
               )}
-              {!isLoading && productionEntries && productionEntries.map((entry) => (
+              {!isLoading && enrichedProductionEntries.map((entry) => (
                 <TableRow key={entry.id}>
-                  <TableCell>{entry.timestamp ? new Date(entry.timestamp.seconds * 1000).toLocaleTimeString() : 'N/A'}</TableCell>
+                  <TableCell className="font-medium">{entry.hourlyRange || 'N/A'}</TableCell>
                   <TableCell>{entry.operatorName}</TableCell>
                   <TableCell>{entry.operationName}</TableCell>
                   <TableCell>{entry.cumulativeQuantity}</TableCell>

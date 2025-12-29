@@ -37,3 +37,14 @@ export function calculateDailyEarnings(earnedMinutes: number, hasAttended: boole
     total,
   };
 }
+
+export function calculateMonthlyEfficiency(totalEarnedMinutes: number, totalWorkedMinutes: number): number {
+  if (totalWorkedMinutes <= 0) {
+    return 0;
+  }
+  return (totalEarnedMinutes / totalWorkedMinutes) * 100;
+}
+
+export function calculateWorkedMinutes(daysWorked: number): number {
+  return daysWorked * AVAILABLE_MINUTES_PER_DAY;
+}

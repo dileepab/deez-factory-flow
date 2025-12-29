@@ -9,13 +9,17 @@ import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
-import { Save } from "lucide-react";
+import { Save, Calendar as CalendarIcon } from "lucide-react";
 import { useCollection } from "@/firebase/firestore/use-collection";
 import { firestore } from "@/firebase/client";
 import { collection, query, where } from "firebase/firestore";
 import type { User, GarmentStyle } from "@/lib/types";
 import { useMemoFirebase } from "@/firebase/use-memo-firebase";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
+import { format } from 'date-fns';
+import { cn } from "@/lib/utils";
 
 const timeSlots = [
   "07:30 - 08:30", // 60 mins
@@ -63,6 +67,7 @@ const getDurationInMinutes = (range: string): number => {
 
 export function ProductionEntry() {
   const { toast } = useToast();
+  const [entryDate, setEntryDate] = useState<Date>(new Date());
 
   const form = useForm<z.infer<typeof productionSchema>>({
     resolver: zodResolver(productionSchema),
@@ -77,6 +82,7 @@ export function ProductionEntry() {
   });
   
   const selectedStyleId = form.watch("styleId");
+  const selectedHourlyRange = form.watch("hourlyRange");
 
   const operatorsQuery = useMemoFirebase(
     () => firestore ? query(collection(firestore, 'users'), where('role', '==', 'operator')) : null, 
@@ -98,23 +104,18 @@ export function ProductionEntry() {
     try {
       const operatorName = operators?.find(op => op.id === values.operatorId)?.name || 'Unknown Operator';
 
-      // 1. Calculate worked minutes from the selected time slot.
       const workedMinutes = getDurationInMinutes(values.hourlyRange);
       if (workedMinutes <= 0) {
         throw new Error("Invalid time range selected.");
       }
 
-      // 2. Prepare the payload for our new, correct API endpoint.
       const apiPayload = {
-        operatorId: values.operatorId,
-        styleId: values.styleId,
-        operationId: values.operationId,
-        quantity: values.quantity,
-        reworkQuantity: values.reworkQuantity,
-        workedMinutes: workedMinutes,
+        ...values,
+        workedMinutes,
+        // Pass the selected date to the API. It must be in a serializable format.
+        date: entryDate.toISOString(), 
       };
 
-      // 3. Call the new backend endpoint to log production.
       const response = await fetch('/api/log-production', {
         method: 'POST',
         headers: {
@@ -129,10 +130,9 @@ export function ProductionEntry() {
         throw new Error(result.message || "An unknown error occurred.");
       }
       
-      // 4. Show success toast and reset the form for the next entry.
       toast({
         title: "Production Logged",
-        description: `Successfully logged ${values.quantity} units for ${operatorName}.`,
+        description: `Successfully logged ${values.quantity} units for ${operatorName} on ${format(entryDate, "PPP")}.`,
       });
 
       form.reset({
@@ -154,11 +154,36 @@ export function ProductionEntry() {
 
   return (
     <Card id="production" className="w-full mx-auto">
-      <CardHeader>
-        <CardTitle>Hourly Production Entry</CardTitle>
-        <CardDescription>
-          Log production data for an operator for a specific time slot.
-        </CardDescription>
+      <CardHeader className="flex-row items-center justify-between">
+        <div>
+          <CardTitle>Hourly Production Entry</CardTitle>
+          <CardDescription>
+            Log production data for an operator for a specific time slot.
+          </CardDescription>
+        </div>
+        <Popover>
+          <PopoverTrigger asChild>
+            <Button
+              variant={"outline"}
+              className={cn(
+                "w-[240px] justify-start text-left font-normal",
+                !entryDate && "text-muted-foreground"
+              )}
+            >
+              <CalendarIcon className="mr-2 h-4 w-4" />
+              {entryDate ? format(entryDate, "PPP") : <span>Pick a date</span>}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="end">
+            <Calendar
+              mode="single"
+              selected={entryDate}
+              onSelect={(date) => setEntryDate(date || new Date())}
+              initialFocus
+              disabled={(date) => date > new Date() || date < new Date("2020-01-01")}
+            />
+          </PopoverContent>
+        </Popover>
       </CardHeader>
       <CardContent>
         <Form {...form}>
@@ -243,7 +268,16 @@ export function ProductionEntry() {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                      {operations.map(op => <SelectItem key={op.id} value={op.id}>{op.name}</SelectItem>)}
+                    {operations.map(op => {
+                        const duration = getDurationInMinutes(selectedHourlyRange);
+                        const smv = op.time;
+                        const targetQuantity = duration > 0 && smv > 0 ? Math.floor((duration * 60) / smv) : 0;
+                        return (
+                          <SelectItem key={op.id} value={op.id}>
+                            {op.name} - {targetQuantity} pcs
+                          </SelectItem>
+                        );
+                      })}
                     </SelectContent>
                   </Select>
                   <FormMessage />

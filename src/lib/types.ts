@@ -73,7 +73,7 @@ export interface ProductionEntry {
   timestamp: Timestamp;
 
   // Core production metrics for this specific entry
-  quantity: number;
+  cumulativeQuantity: number;
   reworkQuantity: number;
   workedMinutes: number;
 

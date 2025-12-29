@@ -1,427 +1,397 @@
 'use client';
 
-import { useState, useEffect, Fragment, useMemo } from 'react';
-import Link from 'next/link';
-import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog';
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from "@/components/ui/alert-dialog"
-
-import { Badge } from '@/components/ui/badge';
-import { PlusCircle, Loader2, RefreshCw, ChevronDown, ChevronRight, Pencil, CheckCircle, XCircle } from 'lucide-react';
-import { Input } from '../ui/input';
-import { Label } from '../ui/label';
+import { useState, useMemo } from 'react';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import { firestore } from '@/firebase/client';
-import { collection, addDoc, doc, setDoc } from 'firebase/firestore';
-import type { GarmentStyle } from '@/lib/types';
-import { useToast } from '@/hooks/use-toast';
-import { GARMENT_STYLES } from '@/lib/data';
+import { collection, query, where, doc, addDoc, updateDoc, deleteDoc, writeBatch } from 'firebase/firestore';
+import type { GarmentStyle, Operation } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
-import { StyleProgress } from './style-progress';
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { PlusCircle, Edit, Trash, Loader2, MoreVertical, X } from 'lucide-react';
+import { useToast } from '@/hooks/use-toast';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
+import { Progress } from '@/components/ui/progress';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 
-const ITEMS_PER_PAGE = 5;
+const SMV_CONVERSION_RATE = 20; // Example: 1 minute = 20 cents
 
 export function StyleManagement() {
   const { toast } = useToast();
-  const stylesQuery = useMemoFirebase(
-    () => (collection(firestore, 'styles')),
-    []
-  );
-  const { data: styles, isLoading: stylesLoading } =
-    useCollection<GarmentStyle>(stylesQuery);
-  const [open, setOpen] = useState(false);
-  const [isSeeding, setIsSeeding] = useState(false);
-  const [seedAttempted, setSeedAttempted] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('active');
-  const [expandedRows, setExpandedRows] = useState<string[]>([]);
-  const [currentPage, setCurrentPage] = useState(1);
+  const [isNewStyleDialogOpen, setIsNewStyleDialogOpen] = useState(false);
+  const [isEditStyleDialogOpen, setIsEditStyleDialogOpen] = useState(false);
+  const [isOperationDialogOpen, setIsOperationDialogOpen] = useState(false);
+  const [styleToDelete, setStyleToDelete] = useState<GarmentStyle | null>(null);
+  const [operationToDelete, setOperationToDelete] = useState<{ styleId: string; opId: string; } | null>(null);
+  
+  const [currentStyle, setCurrentStyle] = useState<GarmentStyle | null>(null);
+  const [currentOperation, setCurrentOperation] = useState<Partial<Operation> | null>(null);
+  
+  const [newStyleName, setNewStyleName] = useState("");
+  const [newStyleQuantity, setNewStyleQuantity] = useState<number>(0);
+  const [newOperationName, setNewOperationName] = useState("");
+  const [newOperationTime, setNewOperationTime] = useState<number>(0);
 
-  useEffect(() => {
-    if (styles?.length === 0 && !stylesLoading && !seedAttempted) {
-      setSeedAttempted(true);
-      handleSeedData();
-    }
-  }, [styles, stylesLoading, seedAttempted]);
+  const activeStylesQuery = useMemoFirebase(() => firestore ? query(collection(firestore, 'styles'), where('status', '==', 'active')) : null, []);
+  const { data: styles, isLoading, error } = useCollection<GarmentStyle>(activeStylesQuery);
 
-  const handleSeedData = async () => {
-    if (!firestore) return;
-    setIsSeeding(true);
-    toast({
-      title: 'Seeding Data',
-      description: 'Adding initial garment styles to the database...',
-    });
-    try {
-      for (const style of GARMENT_STYLES) {
-        const totalSmvInSeconds = style.operations.reduce((sum, op) => sum + op.time, 0);
-        const totalSmv = totalSmvInSeconds / 60; // Convert to minutes
-        const correctedStyle = { ...style, totalSmv, quantity: 1000, status: 'active' as const };
+  const totalSmv = useMemo(() => {
+    if (!currentStyle || !currentStyle.operations) return 0;
+    return currentStyle.operations.reduce((acc, op) => acc + (op.time || 0), 0);
+  }, [currentStyle]);
 
-        const styleRef = doc(firestore, 'styles', style.id);
-        await setDoc(styleRef, correctedStyle);
-      }
-      toast({
-        title: 'Seeding Complete',
-        description: 'Initial garment styles have been added.',
-      });
-    } catch (error) {
-      console.error('Error seeding styles: ', error);
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to seed styles. Please try again.',
-      });
-    } finally {
-      setIsSeeding(false);
-    }
+  const handleOpenNewStyleDialog = () => {
+    setIsNewStyleDialogOpen(true);
+    setNewStyleName("");
+    setNewStyleQuantity(0);
   };
 
-  const handleAddStyle = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSaveNewStyle = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!firestore) return;
-
-    const formData = new FormData(e.currentTarget);
-    const newStyle = {
-      id: `style-${Math.random().toString(36).substring(2, 9)}`,
-      name: formData.get('styleName') as string,
-      startDate: formData.get('startDate') as string,
-      quantity: parseInt(formData.get('quantity') as string, 10),
-      totalSmv: 0,
-      operations: [],
-      status: 'active' as const,
-    };
-
+    if (!firestore || !newStyleName || newStyleQuantity <= 0) return;
     try {
-      const docRef = doc(firestore, 'styles', newStyle.id);
-      await setDoc(docRef, newStyle);
-      toast({
-        title: 'Style Added',
-        description: `Successfully added style "${newStyle.name}".`,
+      await addDoc(collection(firestore, 'styles'), {
+        name: newStyleName,
+        orderQuantity: newStyleQuantity,
+        status: 'active',
+        totalSmv: 0,
+        operations: []
       });
-      setOpen(false);
+      toast({ title: 'Style Created', description: `Style "${newStyleName}" has been added.` });
+      setIsNewStyleDialogOpen(false);
     } catch (error) {
-      console.error('Error adding style: ', error);
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to add style. Please try again.',
-      });
+      console.error("Error creating style: ", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not create the new style." });
     }
   };
 
-  const handleUpdateStyleStatus = async (styleId: string, status: 'active' | 'completed') => {
-    if (!firestore) return;
+  const handleOpenEditStyleDialog = (style: GarmentStyle) => {
+    setCurrentStyle(style);
+    setNewStyleName(style.name);
+    setNewStyleQuantity(style.quantity);
+    setIsEditStyleDialogOpen(true);
+  };
+
+  const handleUpdateStyle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firestore || !currentStyle || !newStyleName || newStyleQuantity <= 0) return;
+    try {
+      const styleRef = doc(firestore, 'styles', currentStyle.id);
+      await updateDoc(styleRef, { name: newStyleName, orderQuantity: newStyleQuantity });
+      toast({ title: 'Style Updated', description: `Style "${newStyleName}" has been updated.` });
+      setIsEditStyleDialogOpen(false);
+      setCurrentStyle(null);
+    } catch (error) {
+      console.error("Error updating style: ", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not update the style." });
+    }
+  };
+
+  const handleOpenOperationDialog = (style: GarmentStyle, operation: Partial<Operation> | null = null) => {
+    setCurrentStyle(style);
+    if (operation) {
+      setCurrentOperation(operation);
+      setNewOperationName(operation.name || "");
+      setNewOperationTime(operation.time || 0);
+    } else {
+      setCurrentOperation(null);
+      setNewOperationName("");
+      setNewOperationTime(0);
+    }
+    setIsOperationDialogOpen(true);
+  };
+
+  const handleSaveOperation = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!firestore || !currentStyle || !newOperationName || newOperationTime <= 0) return;
+
+    const styleRef = doc(firestore, 'styles', currentStyle.id);
+    let newOperations = [...(currentStyle.operations || [])];
+    let newTotalSmv = totalSmv;
+
+    if (currentOperation && currentOperation.id) { // Editing existing operation
+      const opIndex = newOperations.findIndex(op => op.id === currentOperation.id);
+      if (opIndex > -1) {
+        const oldTime = newOperations[opIndex].time || 0;
+        newTotalSmv = newTotalSmv - oldTime + newOperationTime;
+        newOperations[opIndex] = { ...newOperations[opIndex], name: newOperationName, time: newOperationTime };
+      }
+    } else { // Adding new operation
+      newOperations.push({ id: `op_${Date.now()}`, name: newOperationName, time: newOperationTime, completedQuantity: 0 });
+      newTotalSmv += newOperationTime;
+    }
 
     try {
-      const styleRef = doc(firestore, 'styles', styleId);
-      await setDoc(styleRef, { status }, { merge: true });
-      toast({
-        title: 'Style Status Updated',
-        description: `Successfully set style to ${status}`,
-      });
+      await updateDoc(styleRef, { operations: newOperations, totalSmv: newTotalSmv });
+      toast({ title: `Operation ${currentOperation ? 'Updated' : 'Added'}`, description: `Operation "${newOperationName}" has been saved.` });
+      setIsOperationDialogOpen(false);
+      setCurrentStyle(null);
+      setCurrentOperation(null);
     } catch (error) {
-      console.error('Error updating style status: ', error);
-      toast({
-        variant: 'destructive',
-        title: 'Error',
-        description: 'Failed to update style status. Please try again.',
-      });
+      console.error("Error saving operation: ", error);
+      toast({ variant: "destructive", title: "Error", description: "Could not save the operation." });
     }
+  };
+  
+  const handleDeleteStyle = async () => {
+    if (!firestore || !styleToDelete) return;
+    try {
+        const styleRef = doc(firestore, 'styles', styleToDelete.id);
+        const productionQuery = query(collection(firestore, "production"), where("styleId", "==", styleToDelete.id));
+        const productionSnapshot = await getDocs(productionQuery);
+
+        const batch = writeBatch(firestore);
+        productionSnapshot.forEach(doc => {
+            batch.delete(doc.ref);
+        });
+        batch.delete(styleRef);
+        await batch.commit();
+
+        toast({ title: 'Style Deleted', description: `Style "${styleToDelete.name}" and all its production data have been removed.` });
+    } catch (error) {
+        console.error("Error deleting style: ", error);
+        toast({ variant: "destructive", title: "Deletion Failed", description: "Could not delete the style and its associated data." });
+    } finally {
+        setStyleToDelete(null);
+    }
+  };
+
+  const handleDeleteOperation = async () => {
+      if (!firestore || !operationToDelete) return;
+      const { styleId, opId } = operationToDelete;
+      try {
+          const styleRef = doc(firestore, 'styles', styleId);
+          const styleDoc = await getDoc(styleRef);
+          if (styleDoc.exists()) {
+              const styleData = styleDoc.data() as GarmentStyle;
+              const operationToRemove = styleData.operations.find(op => op.id === opId);
+              const newOperations = styleData.operations.filter(op => op.id !== opId);
+              const newTotalSmv = styleData.totalSmv - (operationToRemove?.time || 0);
+              await updateDoc(styleRef, { operations: newOperations, totalSmv: newTotalSmv });
+              toast({ title: 'Operation Deleted', description: 'The operation has been removed from the style.' });
+          }
+      } catch (error) {
+          console.error("Error deleting operation: ", error);
+          toast({ variant: "destructive", title: "Error", description: "Could not delete the operation." });
+      } finally {
+          setOperationToDelete(null);
+      }
+  };
+
+  if (isLoading) {
+    return <div className="flex items-center justify-center h-48"><Loader2 className="h-8 w-8 animate-spin" /></div>;
   }
 
-  const toggleRow = (id: string) => {
-    setExpandedRows(prev =>
-        prev.includes(id) ? prev.filter(rowId => rowId !== id) : [...prev, id]
-    );
-  };
-
-  const sortedStyles = useMemo(() => {
-    if (!styles) return [];
-    return [...styles].sort((a, b) => new Date(b.startDate).getTime() - new Date(a.startDate).getTime());
-  }, [styles]);
-
-  const filteredStyles = useMemo(() => {
-    return sortedStyles.filter(style => {
-        const searchTermMatch = style.name.toLowerCase().includes(searchTerm.toLowerCase());
-        if (statusFilter === 'all') {
-            return searchTermMatch;
-        }
-        return searchTermMatch && (style.status || 'active') === statusFilter;
-    });
-}, [sortedStyles, searchTerm, statusFilter]);
-
-  const paginatedStyles = filteredStyles.slice(
-    (currentPage - 1) * ITEMS_PER_PAGE,
-    currentPage * ITEMS_PER_PAGE
-  );
-
-  const totalPages = Math.ceil(filteredStyles.length / ITEMS_PER_PAGE);
-
+  if (error) {
+    return <div className="text-red-500 text-center">Error loading styles: {error.message}</div>;
+  }
 
   return (
-    <Card id="styles">
-      <CardHeader className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
-        <div>
-          <CardTitle>Garment Style Management</CardTitle>
-          <CardDescription>View, add, or manage garment styles.</CardDescription>
-        </div>
-        <div className="flex flex-wrap gap-2">
-        <AlertDialog>
-          <AlertDialogTrigger asChild>
-            <Button variant="destructive" disabled={isSeeding}>
-              <RefreshCw className="mr-2 h-4 w-4" /> Re-seed Data
-            </Button>
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-              <AlertDialogDescription>
-                This will wipe all existing styles and replace them with the initial seed data. This action cannot be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Cancel</AlertDialogCancel>
-              <AlertDialogAction onClick={handleSeedData}>Continue</AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
+    <>
+        <Card>
+            <CardHeader className="flex flex-row items-center justify-between">
+                <div>
+                    <CardTitle>Garment Style Management</CardTitle>
+                    <CardDescription>Add, edit, and manage garment styles and their operations.</CardDescription>
+                </div>
+                <Button onClick={handleOpenNewStyleDialog}>
+                    <PlusCircle className="mr-2 h-4 w-4" /> Add New Style
+                </Button>
+            </CardHeader>
+            <CardContent>
+                 {styles && styles.length > 0 ? (
+                    <div className="space-y-4">
+                        {styles.map(style => {
+                            const totalCompleted = style.operations?.reduce((sum, op) => sum + (op.completedQuantity || 0), 0) || 0;
+                            const averageProgress = style.orderQuantity > 0 && style.operations?.length > 0
+                                ? (totalCompleted / (style.orderQuantity * style.operations.length)) * 100
+                                : 0;
+
+                            return (
+                                <Card key={style.id} className="overflow-hidden">
+                                    <CardHeader className="bg-muted/50 p-4 flex flex-row items-center justify-between">
+                                        <div className="flex items-center gap-4">
+                                            <div>
+                                                <CardTitle className="text-lg">{style.name}</CardTitle>
+                                                <CardDescription>
+                                                    Order Quantity: {style.orderQuantity} units | Total SMV: {(style.totalSmv / 60).toFixed(2)} min
+                                                </CardDescription>
+                                            </div>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                          <div className="w-32 text-right">
+                                              <Progress value={averageProgress} className="h-2" />
+                                              <span className="text-xs text-muted-foreground">Overall: {averageProgress.toFixed(0)}%</span>
+                                          </div>
+                                          <DropdownMenu>
+                                              <DropdownMenuTrigger asChild>
+                                                  <Button variant="ghost" className="h-8 w-8 p-0">
+                                                      <span className="sr-only">Open menu</span>
+                                                      <MoreVertical className="h-4 w-4" />
+                                                  </Button>
+                                              </DropdownMenuTrigger>
+                                              <DropdownMenuContent align="end">
+                                                  <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                                  <DropdownMenuItem onClick={() => handleOpenEditStyleDialog(style)}>
+                                                      <Edit className="mr-2 h-4 w-4" /> Edit Style
+                                                  </DropdownMenuItem>
+                                                  <DropdownMenuItem onClick={() => handleOpenOperationDialog(style)}>
+                                                      <PlusCircle className="mr-2 h-4 w-4" /> Add Operation
+                                                  </DropdownMenuItem>
+                                                  <DropdownMenuSeparator />
+                                                  <DropdownMenuItem onClick={() => setStyleToDelete(style)} className="text-red-600">
+                                                      <Trash className="mr-2 h-4 w-4" /> Delete Style
+                                                  </DropdownMenuItem>
+                                              </DropdownMenuContent>
+                                          </DropdownMenu>
+                                        </div>
+                                    </CardHeader>
+                                    <CardContent className="p-0">
+                                        <Table>
+                                            <TableHeader>
+                                                <TableRow>
+                                                    <TableHead className="w-1/2">Operation Name</TableHead>
+                                                    <TableHead>SMV (seconds)</TableHead>
+                                                    <TableHead>Cost</TableHead>
+                                                    <TableHead className="w-1/4 text-center">Progress</TableHead>
+                                                    <TableHead className="text-right">Actions</TableHead>
+                                                </TableRow>
+                                            </TableHeader>
+                                            <TableBody>
+                                                {style.operations && style.operations.length > 0 ? style.operations.map(op => {
+                                                  const progress = style.orderQuantity > 0 ? ((op.completedQuantity || 0) / style.orderQuantity) * 100 : 0;
+                                                  return (
+                                                    <TableRow key={op.id}>
+                                                        <TableCell className="font-medium">{op.name}</TableCell>
+                                                        <TableCell>{op.time}</TableCell>
+                                                        <TableCell>${((op.time / 60) * SMV_CONVERSION_RATE / 100).toFixed(2)}</TableCell>
+                                                        <TableCell className="text-center">
+                                                            <div className="flex items-center gap-2">
+                                                                <Progress value={progress} className="h-2 flex-1" />
+                                                                <span className="text-xs font-medium w-12 text-right">{Math.min(100, progress).toFixed(0)}%</span>
+                                                            </div>
+                                                        </TableCell>
+                                                        <TableCell className="text-right">
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => handleOpenOperationDialog(style, op)}>
+                                                                <Edit className="h-4 w-4" />
+                                                            </Button>
+                                                            <Button variant="ghost" size="icon" className="h-8 w-8 text-red-600" onClick={() => setOperationToDelete({ styleId: style.id, opId: op.id })}>
+                                                                <Trash className="h-4 w-4" />
+                                                            </Button>
+                                                        </TableCell>
+                                                    </TableRow>
+                                                  )
+                                                }) : (
+                                                    <TableRow>
+                                                        <TableCell colSpan={5} className="text-center h-24 text-muted-foreground">
+                                                            No operations defined for this style. <Button variant="link" className="p-0 h-auto" onClick={() => handleOpenOperationDialog(style)}>Add one now</Button>.
+                                                        </TableCell>
+                                                    </TableRow>
+                                                )}
+                                            </TableBody>
+                                        </Table>
+                                    </CardContent>
+                                </Card>
+                            );
+                        })}
+                    </div>
+                ) : (
+                     <div className="text-center text-muted-foreground py-12">
+                        <p>No active garment styles found.</p>
+                        <Button variant="link" onClick={handleOpenNewStyleDialog}>Create the first one</Button>
+                    </div>
+                )}
+            </CardContent>
+        </Card>
+
+        {/* New/Edit Style Dialog */}
+        <Dialog open={isNewStyleDialogOpen || isEditStyleDialogOpen} onOpenChange={(isOpen) => { if (!isOpen) { setIsNewStyleDialogOpen(false); setIsEditStyleDialogOpen(false); setCurrentStyle(null); } }}>
+            <DialogContent>
+                <form onSubmit={isEditStyleDialogOpen ? handleUpdateStyle : handleSaveNewStyle}>
+                    <DialogHeader>
+                        <DialogTitle>{isEditStyleDialogOpen ? "Edit Style" : "Create New Garment Style"}</DialogTitle>
+                        <DialogDescription>{isEditStyleDialogOpen ? "Update the details for this style." : "Enter the details for the new style."}</DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="style-name" className="text-right">Style Name</Label>
+                            <Input id="style-name" value={newStyleName} onChange={(e) => setNewStyleName(e.target.value)} className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="order-quantity" className="text-right">Order Quantity</Label>
+                            <Input id="order-quantity" type="number" value={newStyleQuantity} onChange={(e) => setNewStyleQuantity(Number(e.target.value))} className="col-span-3" required min="1" />
+                        </div>
+                    </div>
+                    <DialogFooter>
+                        <DialogClose asChild><Button type="button" variant="secondary">Cancel</Button></DialogClose>
+                        <Button type="submit">{isEditStyleDialogOpen ? "Save Changes" : "Create Style"}</Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
+
+
+        {/* Add/Edit Operation Dialog */}
+        <Dialog open={isOperationDialogOpen} onOpenChange={(isOpen) => { if (!isOpen) setIsOperationDialogOpen(false); }}>
+            <DialogContent>
+                <form onSubmit={handleSaveOperation}>
+                    <DialogHeader>
+                        <DialogTitle>{currentOperation ? "Edit Operation" : "Add New Operation"}</DialogTitle>
+                         <DialogDescription>Style: {currentStyle?.name}</DialogDescription>
+                    </DialogHeader>
+                    <div className="grid gap-4 py-4">
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="op-name" className="text-right">Op Name</Label>
+                            <Input id="op-name" value={newOperationName} onChange={(e) => setNewOperationName(e.target.value)} className="col-span-3" required />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="op-time" className="text-right">Time (seconds)</Label>
+                            <Input id="op-time" type="number" value={newOperationTime} onChange={(e) => setNewOperationTime(Number(e.target.value))} className="col-span-3" required min="1" />
+                        </div>
+                    </div>
+                    <DialogFooter>
+                         <DialogClose asChild><Button type="button" variant="secondary">Cancel</Button></DialogClose>
+                        <Button type="submit">{currentOperation ? "Save Changes" : "Add Operation"}</Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
+        
+        {/* Delete Style Confirmation */}
+        <AlertDialog open={!!styleToDelete} onOpenChange={() => setStyleToDelete(null)}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        This action cannot be undone. This will permanently delete the style <span className="font-bold">{styleToDelete?.name}</span> and all associated production data.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleDeleteStyle}>Continue</AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
         </AlertDialog>
 
-          <Dialog open={open} onOpenChange={setOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <PlusCircle className="mr-2 h-4 w-4" /> Add Style
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="sm:max-w-[425px]">
-              <DialogHeader>
-                <DialogTitle>Add New Style</DialogTitle>
-                <DialogDescription>
-                  Enter the details for the new garment style.
-                </DialogDescription>
-              </DialogHeader>
-              <form onSubmit={handleAddStyle} className="grid gap-4 py-4">
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="styleName" className="text-right">
-                    Style Name
-                  </Label>
-                  <Input
-                    id="styleName"
-                    name="styleName"
-                    className="col-span-3"
-                    required
-                  />
-                </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="startDate" className="text-right">
-                    Start Date
-                  </Label>
-                  <Input
-                    id="startDate"
-                    name="startDate"
-                    type="date"
-                    className="col-span-3"
-                    required
-                  />
-                </div>
-                <div className="grid grid-cols-4 items-center gap-4">
-                  <Label htmlFor="quantity" className="text-right">
-                    Quantity
-                  </Label>
-                  <Input
-                    id="quantity"
-                    name="quantity"
-                    type="number"
-                    className="col-span-3"
-                    required
-                    defaultValue="1000"
-                  />
-                </div>
-                <Button type="submit">Add Style</Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </CardHeader>
-      <CardContent className="overflow-x-auto">
-        <div className="flex flex-wrap items-center gap-4 mb-4">
-            <Input
-                placeholder="Filter styles..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="max-w-sm"
-            />
-            <div className="flex items-center gap-2">
-                <Button variant={statusFilter === 'all' ? 'secondary' : 'outline'} size="sm" onClick={() => setStatusFilter('all')}>All</Button>
-                <Button variant={statusFilter === 'active' ? 'secondary' : 'outline'} size="sm" onClick={() => setStatusFilter('active')}>Active</Button>
-                <Button variant={statusFilter === 'completed' ? 'secondary' : 'outline'} size="sm" onClick={() => setStatusFilter('completed')}>Completed</Button>
-            </div>
-        </div>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Style</TableHead>
-              <TableHead>Start Date</TableHead>
-              <TableHead>Quantity</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead className="text-center">Ops</TableHead>
-              <TableHead className="text-right">SMV</TableHead>
-              <TableHead className="text-right">Actions</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(stylesLoading || isSeeding) && (
-              <TableRow>
-                <TableCell colSpan={7} className="text-center">
-                  <div className="flex justify-center items-center">
-                    <Loader2 className="h-6 w-6 animate-spin text-primary mr-2" />
-                    {isSeeding ? 'Seeding initial data...' : 'Loading styles...'}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-              {paginatedStyles.map(style => (
-                <Fragment key={style.id}>
-                  <TableRow>
-                    <TableCell className="font-medium">{style.name}</TableCell>
-                    <TableCell>{style.startDate}</TableCell>
-                    <TableCell>{style.quantity}</TableCell>
-                    <TableCell>
-                        <Badge variant={style.status === 'completed' ? 'outline' : 'default'}>
-                            {style.status}
-                        </Badge>
-                    </TableCell>
-                    <TableCell className="text-center">
-                      <Badge variant="secondary">{style.operations.length}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right font-mono">
-                      {style.totalSmv.toFixed(2)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <Button variant="ghost" size="sm" onClick={() => toggleRow(style.id)}>
-                          {expandedRows.includes(style.id) ? (
-                              <>
-                                  <ChevronDown className="mr-2 h-4 w-4" />
-                                  Hide
-                              </>
-                          ) : (
-                              <>
-                                  <ChevronRight className="mr-2 h-4 w-4" />
-                                  View
-                              </>
-                          )}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                  {expandedRows.includes(style.id) && (
-                      <TableRow className="bg-muted/50">
-                          <TableCell colSpan={7}>
-                              <div className="p-4 grid gap-4">
-                                  <div className="flex justify-between items-center">
-                                    <h4 className="font-semibold">Progress for {style.name}</h4>
-                                    <div className="flex items-center gap-2">
-                                        <Link href={`/dashboard/styles/${style.id}`} passHref>
-                                            <Button variant="outline" size="sm">
-                                                <Pencil className="mr-2 h-4 w-4" />
-                                                Manage Operations
-                                            </Button>
-                                        </Link>
-                                        {style.status === 'active' ? (
-                                            <Button variant="outline" size="sm" onClick={() => handleUpdateStyleStatus(style.id, 'completed') }>
-                                                <CheckCircle className="mr-2 h-4 w-4" />
-                                                Mark as Complete
-                                            </Button>
-                                        ) : (
-                                            <Button variant="outline" size="sm" onClick={() => handleUpdateStyleStatus(style.id, 'active') }>
-                                                <XCircle className="mr-2 h-4 w-4" />
-                                                Re-open Style
-                                            </Button>
-                                        )}
-                                    </div>
-                                  </div>
-                                  <StyleProgress style={style} />
-                                  <h4 className="font-semibold mt-4">Operations for {style.name}</h4>
-                                  <Table>
-                                      <TableHeader>
-                                          <TableRow>
-                                              <TableHead>Operation Name</TableHead>
-                                              <TableHead>Machine Type</TableHead>
-                                              <TableHead className="text-right">Time (s)</TableHead>
-                                          </TableRow>
-                                      </TableHeader>
-                                      <TableBody>
-                                          {style.operations.map(op => (
-                                              <TableRow key={op.id}>
-                                                  <TableCell>{op.name}</TableCell>
-                                                  <TableCell>
-                                                      <Badge variant="secondary">{op.machineType}</Badge>
-                                                  </TableCell>
-                                                  <TableCell className="text-right font-mono">{op.time}</TableCell>
-                                              </TableRow>
-                                          ))}
-                                      </TableBody>
-                                  </Table>
-                              </div>
-                          </TableCell>
-                      </TableRow>
-                  )}
-                </Fragment>
-              ))}
-            </TableBody>
-          </Table>
-        <div className="flex items-center justify-end space-x-2 py-4">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
-            disabled={currentPage === 1}
-          >
-            Previous
-          </Button>
-          <span className="text-sm">
-            Page {currentPage} of {totalPages}
-          </span>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
-            disabled={currentPage === totalPages}
-          >
-            Next
-          </Button>
-        </div>
-      </CardContent>
-    </Card>
+        {/* Delete Operation Confirmation */}
+        <AlertDialog open={!!operationToDelete} onOpenChange={() => setOperationToDelete(null)}>
+            <AlertDialogContent>
+                <AlertDialogHeader>
+                    <AlertDialogTitle>Delete Operation?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                        Are you sure you want to remove this operation? This action cannot be undone.
+                    </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                    <AlertDialogCancel>Cancel</AlertDialogCancel>
+                    <AlertDialogAction onClick={handleDeleteOperation}>Delete</AlertDialogAction>
+                </AlertDialogFooter>
+            </AlertDialogContent>
+        </AlertDialog>
+    </>
   );
 }

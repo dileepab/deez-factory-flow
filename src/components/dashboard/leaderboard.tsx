@@ -4,29 +4,13 @@ import { useMemo, useState } from 'react';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import { firestore } from '@/firebase/client';
-import { collection, query, where, Timestamp } from 'firebase/firestore';
-import type { Operator, ProductionEntry, OperatorWithEfficiency } from '@/lib/types';
+import { collection, query, where } from 'firebase/firestore';
+import type { Operator, OperatorWithEfficiency } from '@/lib/types';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Loader2 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-
-// Helper to calculate aggregate efficiency from a list of production entries
-const calculateAggregateEfficiency = (productions: ProductionEntry[]): number => {
-  if (productions.length === 0) {
-    return 0;
-  }
-
-  const totalEarnedMinutes = productions.reduce((acc, p) => acc + p.earnedMinutes, 0);
-  const totalWorkedMinutes = productions.reduce((acc, p) => acc + p.workedMinutes, 0);
-
-  if (totalWorkedMinutes === 0) {
-    return 0;
-  }
-
-  return (totalEarnedMinutes / totalWorkedMinutes) * 100;
-};
 
 export function OperatorLeaderboard() {
   const [view, setView] = useState<'today' | 'monthly'>('today');
@@ -39,46 +23,25 @@ export function OperatorLeaderboard() {
 
   const { data: operators, isLoading: operatorsLoading } = useCollection<Operator>(operatorsQuery);
 
-  // 2. Fetch all production data from the last 30 days
-  const productionsQuery = useMemoFirebase(() => {
-    if (!firestore) return null;
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    return query(
-      collection(firestore, 'production'),
-      where('timestamp', '>=', Timestamp.fromDate(thirtyDaysAgo))
-    );
-  }, [firestore]);
-
-  const { data: productions, isLoading: productionsLoading } = useCollection<ProductionEntry>(productionsQuery);
-
   const leaderboardData = useMemo(() => {
-    if (!operators || !productions) {
+    if (!operators) {
       return [];
     }
 
-    // Determine the date range based on the current view
-    const now = new Date();
-    const startOfPeriod = new Date();
-    if (view === 'today') {
-      startOfPeriod.setHours(0, 0, 0, 0);
-    } else { // monthly
-      startOfPeriod.setDate(now.getDate() - 30);
-    }
-
-    const endOfPeriod = now;
-
-    // Filter productions for the selected period
-    const relevantProductions = productions.filter(p => {
-      const pDate = p.timestamp.toDate();
-      return pDate >= startOfPeriod && pDate <= endOfPeriod;
-    });
-
-    // 3. Calculate efficiency for each operator for the selected period
     const leaderboard: OperatorWithEfficiency[] = operators
       .map(op => {
-        const operatorProductions = relevantProductions.filter(p => p.operatorId === op.id);
-        const efficiency = calculateAggregateEfficiency(operatorProductions);
+        let efficiency = 0;
+        if (view === 'today') {
+          const dailyEfficiency = op.efficiency;
+          efficiency = typeof dailyEfficiency === 'number' && isFinite(dailyEfficiency) ? dailyEfficiency : 0;
+        } else { // monthly
+          const now = new Date();
+          const year = now.getFullYear();
+          const month = (now.getMonth() + 1).toString().padStart(2, '0');
+          const monthKey = `${year}-${month}`;
+          const monthlyEfficiency = op.monthlyStats?.[monthKey]?.monthlyEfficiency;
+          efficiency = typeof monthlyEfficiency === 'number' && isFinite(monthlyEfficiency) ? monthlyEfficiency : 0;
+        }
         
         return {
           ...op,
@@ -89,9 +52,9 @@ export function OperatorLeaderboard() {
       .slice(0, 5);
 
     return leaderboard;
-  }, [operators, productions, view]);
+  }, [operators, view]);
 
-  const isLoading = operatorsLoading || productionsLoading;
+  const isLoading = operatorsLoading;
 
   return (
     <Card>
@@ -101,14 +64,14 @@ export function OperatorLeaderboard() {
           <CardDescription>
             {view === 'today' 
               ? "Top 5 operators by today's average efficiency."
-              : "Top 5 operators by 30-day average efficiency."
+              : "Top 5 operators by this month's average efficiency."
             }
           </CardDescription>
         </div>
         <Tabs value={view} onValueChange={(value) => setView(value as 'today' | 'monthly')} >
           <TabsList>
             <TabsTrigger value="today">Today</TabsTrigger>
-            <TabsTrigger value="monthly">Monthly</TabsTrigger>
+            <TabsTrigger value="monthly">This Month</TabsTrigger>
           </TabsList>
         </Tabs>
       </CardHeader>
