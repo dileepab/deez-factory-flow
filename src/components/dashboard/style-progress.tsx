@@ -64,11 +64,13 @@ export function StyleProgress({ style }: StyleProgressProps) {
         <span className="text-sm font-medium">
           {equivalentProducedQuantity.toFixed(0)} / {targetQuantity} units
         </span>
+      </div>
+      <Progress value={completionPercentage} />
+      <div className="flex justify-between items-center mb-1">
         <span className="text-sm font-bold">
           {completionPercentage.toFixed(2)}%
         </span>
       </div>
-      <Progress value={completionPercentage} />
     </div>
   );
 }

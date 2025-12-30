@@ -68,6 +68,7 @@ const getDurationInMinutes = (range: string): number => {
 export function ProductionEntry() {
   const { toast } = useToast();
   const [entryDate, setEntryDate] = useState<Date>(new Date());
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   const form = useForm<z.infer<typeof productionSchema>>({
     resolver: zodResolver(productionSchema),
@@ -161,7 +162,7 @@ export function ProductionEntry() {
             Log production data for an operator for a specific time slot.
           </CardDescription>
         </div>
-        <Popover>
+        <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
           <PopoverTrigger asChild>
             <Button
               variant={"outline"}
@@ -178,7 +179,10 @@ export function ProductionEntry() {
             <Calendar
               mode="single"
               selected={entryDate}
-              onSelect={(date) => setEntryDate(date || new Date())}
+              onSelect={(date) => {
+                setEntryDate(date || new Date());
+                setIsCalendarOpen(false);
+              }}
               initialFocus
               disabled={(date) => date > new Date() || date < new Date("2020-01-01")}
             />

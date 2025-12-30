@@ -1,83 +1,83 @@
+import { z } from 'zod';
 
-import { Timestamp } from "firebase/firestore";
-import { z } from "zod";
-import { MACHINE_TYPES } from "./constants";
+export type UserRole = "operator" | "supervisor" | "admin";
+export const UserRoleSchema = z.enum(["operator", "supervisor", "admin"]);
 
-// Define the schema for validation
-export const UserRoleSchema = z.enum(["admin", "supervisor", "operator"]);
+export type MachineType = "single-needle" | "overlock" | "flatlock" | "cover-stitch" | "bartack" | "other";
 
-// Infer the type from the schema
-export type UserRole = z.infer<typeof UserRoleSchema>;
+// --- USER & AUTH TYPES ---
 
-// Create a specific type for machine types from the constant
-export type MachineType = typeof MACHINE_TYPES[number];
-
-// --- CORE USER & PROFILE TYPES ---
-// Static user data. Does not contain dynamic production stats.
 export interface User {
-  id: string;
-  name?: string;
-  email?: string;
-  photoURL?: string;
-  role?: UserRole;
+    id: string;
+    name: string;
+    email: string;
+    role: UserRole;
+    line?: string; // Production line, primarily for supervisors and operators
+    efficiency?: number; // For operators: Today's calculated efficiency
+    earnedMinutes?: number; // For operators: Today's total earned minutes
+    totalOperations?: number; // For operators: Today's total completed operations
+    rework?: number; // For operators: Today's rework count
+    equivalentGarments?: number; // For operators: Today's equivalent garments produced
+    monthlyStats?: {
+        [key: string]: {
+            totalEarnedMinutes: number;
+            daysWorked: number;
+            monthlyEfficiency: number;
+        }
+    }
 }
 
 export interface Operator extends User {
-  role: "operator";
-  // All dynamic production data has been moved to the 'production' collection.
-  // This document should only contain static or slowly changing information.
-  targetSalary?: number;
-  assignedStyle?: string;
-  line?: string;
+    role: "operator";
 }
 
-// This type is used for displaying calculated data in the UI.
 export type OperatorWithEfficiency = User & {
-  efficiency: number;
+    efficiency: number;
 };
 
 export interface Supervisor extends User {
-  role: "supervisor";
-  line: string;
-  operators: string[]; // array of operator IDs
+    role: "supervisor";
+    line: string;
+    operators: string[]; // array of operator IDs
 }
 
 // --- GARMENT & OPERATION TYPES ---
 
 export interface GarmentOperation {
-  id: string;
-  name: string;
-  time: number; // SMV in seconds
-  machineType: MachineType;
-  dependencies?: string[]; // array of operation IDs
+    id: string;
+    name: string;
+    time: number; // SMV in seconds
+    machineType: MachineType;
+    dependencies?: string[]; // array of operation IDs
+    completedQuantity?: number; // Total units completed for this operation
 }
 
 export interface GarmentStyle {
-  id: string;
-  name: string;
-  totalSmv: number; // Total SMV for the entire garment in minutes
-  quantity: number;
-  startDate: string;
-  status: "active" | "completed";
-  operations: GarmentOperation[];
+    id: string;
+    name: string;
+    totalSmv: number; // Total SMV for the entire garment in minutes
+    quantity: number;
+    startDate: string;
+    status: "active" | "completed";
+    operations: GarmentOperation[];
 }
 
-// --- PRODUCTION DATA TYPE ---
-// Represents a single, immutable production log event.
-// This is the new source of truth for all performance data.
+// --- PRODUCTION TYPES ---
+
+// A generic Timestamp type to be compatible with both client and server Firestore SDKs.
+export interface FirestoreTimestamp {
+    seconds: number;
+    nanoseconds: number;
+    toDate(): Date;
+}
+
 export interface ProductionEntry {
-  id: string;
-  operatorId: string;
-  styleId: string;
-  operationId: string;
-  timestamp: Timestamp;
-
-  // Core production metrics for this specific entry
-  cumulativeQuantity: number;
-  reworkQuantity: number;
-  workedMinutes: number;
-
-  // Calculated values, stored for efficient querying
-  earnedMinutes: number;
-  efficiency: number; // as a percentage (e.g., 85.5)
+    id?: string; // Is added client-side after fetching
+    operatorId: string;
+    styleId: string;
+    operationId: string;
+    cumulativeQuantity: number;
+    reworkQuantity: number;
+    hourlyRange: string;
+    timestamp: FirestoreTimestamp;
 }

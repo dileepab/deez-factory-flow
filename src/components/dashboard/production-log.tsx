@@ -17,6 +17,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { format } from 'date-fns';
 import { cn } from '@/lib/utils';
 
@@ -25,15 +26,20 @@ interface EnrichedProductionEntry extends ProductionEntryType {
   operationName: string;
 }
 
+interface GroupedEntries {
+  [hourlyRange: string]: EnrichedProductionEntry[];
+}
+
 // Helper function to extract the start time from a range like "07:30 - 08:30"
 const getStartTime = (range: string = '') => {
-  if (!range) return '00:00';
+  if (!range || range === 'Uncategorized') return '99:99'; // Put uncategorized last
   return range.split('-')[0].trim();
 };
 
 export function ProductionLog() {
   const { toast } = useToast();
   const [selectedDate, setSelectedDate] = useState<Date>(new Date());
+  const [isCalendarOpen, setIsCalendarOpen] = useState(false);
 
   const [entryToDelete, setEntryToDelete] = useState<EnrichedProductionEntry | null>(null);
   const [entryToEdit, setEntryToEdit] = useState<EnrichedProductionEntry | null>(null);
@@ -49,7 +55,6 @@ export function ProductionLog() {
       collection(firestore, 'production'),
       where('timestamp', '>=', Timestamp.fromDate(startOfDay)),
       where('timestamp', '<=', Timestamp.fromDate(endOfDay))
-      // We can no longer sort by timestamp, as we need to sort by the time range string.
     );
   }, [selectedDate]);
 
@@ -57,8 +62,8 @@ export function ProductionLog() {
   const { data: operators, isLoading: operatorsLoading } = useCollection<User>(useMemoFirebase(() => firestore ? collection(firestore, 'users') : null, []));
   const { data: styles, isLoading: stylesLoading } = useCollection<GarmentStyle>(useMemoFirebase(() => firestore ? collection(firestore, 'styles') : null, []));
 
-  const enrichedProductionEntries = useMemo<EnrichedProductionEntry[]>(() => {
-    if (!productionEntries || !operators || !styles) return [];
+  const groupedProductionEntries = useMemo<GroupedEntries>(() => {
+    if (!productionEntries || !operators || !styles) return {};
 
     const allOperations = styles.flatMap(s => s.operations || []);
 
@@ -72,24 +77,35 @@ export function ProductionLog() {
       };
     });
 
-    // Sort the entries based on the start time of their hourlyRange.
-    enriched.sort((a, b) => {
-        const startTimeA = getStartTime(a.hourlyRange);
-        const startTimeB = getStartTime(b.hourlyRange);
-        return startTimeA.localeCompare(startTimeB);
-    });
+    // Group the entries by their hourlyRange
+    return enriched.reduce((acc, entry) => {
+      const range = entry.hourlyRange || 'Uncategorized';
+      if (!acc[range]) {
+        acc[range] = [];
+      }
+      acc[range].push(entry);
+      return acc;
+    }, {} as GroupedEntries);
 
-    return enriched;
   }, [productionEntries, operators, styles]);
+
+  const sortedTimeRanges = useMemo(() => {
+    return Object.keys(groupedProductionEntries).sort((a, b) => {
+      const startTimeA = getStartTime(a);
+      const startTimeB = getStartTime(b);
+      return startTimeA.localeCompare(startTimeB);
+    });
+  }, [groupedProductionEntries]);
+
 
   const isLoading = entriesLoading || operatorsLoading || stylesLoading;
 
-  const triggerStatsUpdate = async (operatorId: string) => {
+  const triggerStatsUpdate = async (operatorId: string, styleId: string) => {
     try {
       const response = await fetch('/api/update-stats', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ operatorId, date: selectedDate.toISOString() }),
+        body: JSON.stringify({ operatorId, styleId, date: selectedDate.toISOString() }),
       });
       if (!response.ok) throw new Error('Failed to trigger stats update');
       toast({ title: 'Stats Recalculated', description: "The operator's daily statistics have been updated." });
@@ -100,11 +116,14 @@ export function ProductionLog() {
   };
 
   const handleDelete = async () => {
-    if (!firestore || !entryToDelete) return;
+    if (!firestore || !entryToDelete || !entryToDelete.id) {
+        toast({ variant: 'destructive', title: 'Error', description: 'No entry selected for deletion.' });
+        return;
+    }
     try {
       await deleteDoc(doc(firestore, 'production', entryToDelete.id));
       toast({ title: 'Entry Deleted', description: 'The production log has been removed.' });
-      await triggerStatsUpdate(entryToDelete.operatorId);
+      await triggerStatsUpdate(entryToDelete.operatorId, entryToDelete.styleId);
     } catch (error) {
       console.error('Error deleting document: ', error);
       toast({ variant: 'destructive', title: 'Error', description: 'Could not delete the entry.' });
@@ -115,7 +134,10 @@ export function ProductionLog() {
 
   const handleEdit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!firestore || !entryToEdit) return;
+    if (!firestore || !entryToEdit || !entryToEdit.id) {
+        toast({ variant: 'destructive', title: 'Error', description: 'No entry selected for editing.' });
+        return;
+    }
     
     const quantity = parseInt(newQuantity, 10);
     if (isNaN(quantity) || quantity < 0) {
@@ -127,7 +149,7 @@ export function ProductionLog() {
       const entryRef = doc(firestore, 'production', entryToEdit.id);
       await updateDoc(entryRef, { cumulativeQuantity: quantity });
       toast({ title: 'Entry Updated', description: 'The production quantity has been updated.' });
-      await triggerStatsUpdate(entryToEdit.operatorId);
+      await triggerStatsUpdate(entryToEdit.operatorId, entryToEdit.styleId);
     } catch (error) {
       console.error('Error updating document: ', error);
       toast({ variant: 'destructive', title: 'Error', description: 'Could not update the entry.' });
@@ -145,7 +167,7 @@ export function ProductionLog() {
                 <CardTitle>Production Log</CardTitle>
                 <CardDescription>View, edit, or delete production entries for the selected date.</CardDescription>
             </div>
-            <Popover>
+            <Popover open={isCalendarOpen} onOpenChange={setIsCalendarOpen}>
               <PopoverTrigger asChild>
                 <Button
                   variant={"outline"}
@@ -162,59 +184,65 @@ export function ProductionLog() {
                 <Calendar
                   mode="single"
                   selected={selectedDate}
-                  onSelect={(date) => setSelectedDate(date || new Date())}
+                  onSelect={(date) => {
+                    setSelectedDate(date || new Date());
+                    setIsCalendarOpen(false);
+                  }}
                   initialFocus
                 />
               </PopoverContent>
             </Popover>
         </CardHeader>
         <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Time Range</TableHead>
-                <TableHead>Operator</TableHead>
-                <TableHead>Operation</TableHead>
-                <TableHead>Quantity</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading && (
-                <TableRow>
-                  <TableCell colSpan={5} className="text-center h-24">
-                     <div className="flex justify-center items-center">
-                        <Loader2 className="h-6 w-6 animate-spin text-primary mr-2" />
-                        Loading logs...
-                    </div>
-                  </TableCell>
-                </TableRow>
-              )}
-              {!isLoading && enrichedProductionEntries.length === 0 && (
-                <TableRow>
-                    <TableCell colSpan={5} className="text-center text-muted-foreground h-24">
-                        No production has been logged for {format(selectedDate, "PPP")}.
-                    </TableCell>
-                </TableRow>
-              )}
-              {!isLoading && enrichedProductionEntries.map((entry) => (
-                <TableRow key={entry.id}>
-                  <TableCell className="font-medium">{entry.hourlyRange || 'N/A'}</TableCell>
-                  <TableCell>{entry.operatorName}</TableCell>
-                  <TableCell>{entry.operationName}</TableCell>
-                  <TableCell>{entry.cumulativeQuantity}</TableCell>
-                  <TableCell className="text-right">
-                    <Button variant="outline" size="sm" className="mr-2" onClick={() => { setEntryToEdit(entry); setNewQuantity(String(entry.cumulativeQuantity)); }}>
-                      <Edit className="h-4 w-4 mr-1" /> Edit
-                    </Button>
-                    <Button variant="destructive" size="sm" onClick={() => setEntryToDelete(entry)}>
-                      <Trash className="h-4 w-4 mr-1" /> Delete
-                    </Button>
-                  </TableCell>
-                </TableRow>
+          {isLoading && (
+            <div className="flex justify-center items-center h-24">
+                <Loader2 className="h-6 w-6 animate-spin text-primary mr-2" />
+                Loading logs...
+            </div>
+          )}
+          {!isLoading && sortedTimeRanges.length === 0 && (
+            <div className="text-center text-muted-foreground h-24 flex items-center justify-center">
+                No production has been logged for {format(selectedDate, "PPP")}.
+            </div>
+          )}
+          {!isLoading && sortedTimeRanges.length > 0 && (
+            <Accordion type="single" collapsible className="w-full">
+              {sortedTimeRanges.map((range) => (
+                <AccordionItem value={range} key={range}>
+                  <AccordionTrigger className='font-medium'>{range} <span className='ml-2 font-normal text-muted-foreground'>({groupedProductionEntries[range].length} {groupedProductionEntries[range].length === 1 ? 'entry' : 'entries'})</span></AccordionTrigger>
+                  <AccordionContent>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Operator</TableHead>
+                          <TableHead>Operation</TableHead>
+                          <TableHead>Quantity</TableHead>
+                          <TableHead className="text-right">Actions</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {groupedProductionEntries[range].map((entry) => (
+                          <TableRow key={entry.id}>
+                            <TableCell>{entry.operatorName}</TableCell>
+                            <TableCell>{entry.operationName}</TableCell>
+                            <TableCell>{entry.cumulativeQuantity}</TableCell>
+                            <TableCell className="text-right">
+                              <Button variant="outline" size="sm" className="mr-2" onClick={() => { setEntryToEdit(entry); setNewQuantity(String(entry.cumulativeQuantity)); }}>
+                                <Edit className="h-4 w-4 mr-1" /> Edit
+                              </Button>
+                              <Button variant="destructive" size="sm" onClick={() => setEntryToDelete(entry)}>
+                                <Trash className="h-4 w-4 mr-1" /> Delete
+                              </Button>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </AccordionContent>
+                </AccordionItem>
               ))}
-            </TableBody>
-          </Table>
+            </Accordion>
+          )}
         </CardContent>
       </Card>
 
@@ -259,7 +287,7 @@ export function ProductionLog() {
                 />
               </div>
             </div>
-            <DialogFooter>
+            <DialogFooter className='gap-2'>
                 <DialogClose asChild>
                     <Button type="button" variant="secondary">Cancel</Button>
                 </DialogClose>
