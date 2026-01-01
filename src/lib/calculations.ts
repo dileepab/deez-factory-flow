@@ -1,17 +1,17 @@
-import { TARGET_SALARY_LKR, WORKING_DAYS_PER_MONTH, AVAILABLE_MINUTES_PER_DAY } from './constants';
+import { Configuration } from './types';
 
-export function calculateDailyEarnings(earnedMinutes: number, hasAttended: boolean, attendanceBonus: number) {
+export function calculateDailyEarnings(earnedMinutes: number, hasAttended: boolean, attendanceBonus: number, config: Configuration) {
   if (!hasAttended) {
     return { basePay: 0, incentivePay: 0, bonusPay: 0, attendanceBonus: 0, total: 0 };
   }
 
-  const dailyTargetSalary = TARGET_SALARY_LKR / WORKING_DAYS_PER_MONTH;
-  const dailyAttendanceBonus = attendanceBonus / WORKING_DAYS_PER_MONTH;
+  const dailyTargetSalary = config.targetSalaryLKR / config.workingDaysPerMonth;
+  const dailyAttendanceBonus = attendanceBonus / config.workingDaysPerMonth;
 
   const basePay = dailyTargetSalary * 0.5; // 50% of target salary is guaranteed
   const incentivePayTarget = dailyTargetSalary * 0.5; // The other 50% is performance-based
 
-  const efficiency = earnedMinutes / AVAILABLE_MINUTES_PER_DAY;
+  const efficiency = earnedMinutes / config.availableMinutesPerDay;
 
   let incentivePay = 0;
   let bonusPay = 0;
@@ -24,7 +24,7 @@ export function calculateDailyEarnings(earnedMinutes: number, hasAttended: boole
     incentivePay = incentivePayTarget;
     const extraEfficiency = efficiency - 1;
     // Bonus is paid at 2x the rate of the incentive pay
-    bonusPay = (dailyTargetSalary * extraEfficiency) * 2; 
+    bonusPay = (dailyTargetSalary * extraEfficiency) * 2;
   }
 
   const total = basePay + incentivePay + bonusPay + dailyAttendanceBonus;
@@ -45,6 +45,6 @@ export function calculateMonthlyEfficiency(totalEarnedMinutes: number, totalWork
   return (totalEarnedMinutes / totalWorkedMinutes) * 100;
 }
 
-export function calculateWorkedMinutes(daysWorked: number): number {
-  return daysWorked * AVAILABLE_MINUTES_PER_DAY;
+export function calculateWorkedMinutes(daysWorked: number, config: Configuration): number {
+  return daysWorked * config.availableMinutesPerDay;
 }

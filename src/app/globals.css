@@ -71,7 +71,7 @@
   }
   body {
     @apply bg-background text-foreground overflow-x-hidden;
-    touch-action: none;
+    /* touch-action: manipulation; -- allows scrolling/panning but disables double-tap zoom */
   }
 }
 

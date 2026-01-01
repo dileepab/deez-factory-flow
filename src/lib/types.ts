@@ -28,6 +28,8 @@ export interface User {
     name: string;
     email: string;
     role: UserRole;
+    photoURL?: string; // Firebase Auth photo URL
+    avatarUrl?: string; // Custom avatar URL if any
     line?: string; // Production line, primarily for supervisors and operators
     efficiency?: number; // For operators: Today's calculated efficiency
     earnedMinutes?: number; // For operators: Today's total earned minutes
@@ -56,6 +58,8 @@ export interface Supervisor extends User {
     line: string;
     operators: string[]; // array of operator IDs
 }
+
+export type AnyUser = User | Operator | Supervisor;
 
 // --- GARMENT & OPERATION TYPES ---
 

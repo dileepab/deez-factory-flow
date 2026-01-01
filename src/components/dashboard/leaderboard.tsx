@@ -12,7 +12,15 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Loader2 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
-export function OperatorLeaderboard() {
+import { cn } from '@/lib/utils';
+
+interface OperatorLeaderboardProps {
+  limit?: number;
+  minimal?: boolean;
+  className?: string;
+}
+
+export function OperatorLeaderboard({ limit, minimal, className }: OperatorLeaderboardProps) {
   const [view, setView] = useState<'today' | 'monthly'>('today');
 
   // 1. Fetch all operators
@@ -42,27 +50,55 @@ export function OperatorLeaderboard() {
           const monthlyEfficiency = op.monthlyStats?.[monthKey]?.monthlyEfficiency;
           efficiency = typeof monthlyEfficiency === 'number' && isFinite(monthlyEfficiency) ? monthlyEfficiency : 0;
         }
-        
+
         return {
           ...op,
           efficiency,
         };
       })
       .sort((a, b) => b.efficiency - a.efficiency)
-      .slice(0, 5);
+      .slice(0, limit || 5);
 
     return leaderboard;
-  }, [operators, view]);
+  }, [operators, view, limit]);
 
   const isLoading = operatorsLoading;
 
+  if (minimal) {
+    return (
+      <div className="space-y-4">
+        {isLoading ? (
+          <div className="flex justify-center items-center h-20">
+            <Loader2 className="h-4 w-4 animate-spin text-primary" />
+          </div>
+        ) : leaderboardData.length === 0 ? (
+          <div className="text-sm text-muted-foreground">No data available.</div>
+        ) : (
+          leaderboardData.map((op, index) => (
+            <div key={op.id} className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-bold text-muted-foreground w-4">{index + 1}.</span>
+                <Avatar className="h-8 w-8">
+                  {op.photoURL && <AvatarImage src={op.photoURL} alt={op.name ?? 'Operator'} />}
+                  <AvatarFallback className="text-xs">{op.name?.substring(0, 2).toUpperCase() ?? '??'}</AvatarFallback>
+                </Avatar>
+                <span className="text-sm font-medium truncate max-w-[120px]">{op.name ?? 'Unnamed'}</span>
+              </div>
+              <span className="font-bold text-sm">{op.efficiency.toFixed(0)}%</span>
+            </div>
+          ))
+        )}
+      </div>
+    );
+  }
+
   return (
-    <Card>
+    <Card className={cn(className)}>
       <CardHeader className="flex flex-row items-center justify-between">
         <div>
           <CardTitle>Operator Leaderboard</CardTitle>
           <CardDescription>
-            {view === 'today' 
+            {view === 'today'
               ? "Top 5 operators by today's average efficiency."
               : "Top 5 operators by this month's average efficiency."
             }

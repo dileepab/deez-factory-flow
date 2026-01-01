@@ -1,21 +1,20 @@
 import { firestore } from '@/firebase/server';
 import { Timestamp } from 'firebase-admin/firestore';
-import type { ProductionEntry, GarmentStyle, User } from '@/lib/types';
-import { AVAILABLE_MINUTES_PER_DAY } from './constants';
+import type { ProductionEntry, GarmentStyle, User, Configuration } from '@/lib/types';
 import { calculateMonthlyEfficiency, calculateWorkedMinutes } from './calculations';
 
 // Helper to get the start of a given date (in the server's timezone)
 const getStartOfDay = (date: Date) => {
-  const start = new Date(date);
-  start.setHours(0, 0, 0, 0);
-  return Timestamp.fromDate(start);
+    const start = new Date(date);
+    start.setHours(0, 0, 0, 0);
+    return Timestamp.fromDate(start);
 };
 
 // Helper to get the end of a given date (in the server's timezone)
 const getEndOfDay = (date: Date) => {
-  const end = new Date(date);
-  end.setHours(23, 59, 59, 999);
-  return Timestamp.fromDate(end);
+    const end = new Date(date);
+    end.setHours(23, 59, 59, 999);
+    return Timestamp.fromDate(end);
 };
 
 // A consolidated function to calculate stats for a given date range
@@ -73,12 +72,20 @@ async function calculateStatsForPeriod(operatorId: string, startDate: Timestamp,
 export async function updateOperatorStats(operatorId: string, entryDate: Date) {
     if (!firestore) throw new Error("Firestore is not initialized");
 
+    // Fetch Global Configuration
+    const configSnapshot = await firestore.collection('configuration').limit(1).get();
+    if (configSnapshot.empty) {
+        throw new Error("Configuration not found");
+    }
+    const config = configSnapshot.docs[0].data() as Configuration;
+    const availableMinutesPerDay = config.availableMinutesPerDay;
+
     // --- 1. ALWAYS UPDATE TODAY'S STATS ---
     const today = new Date(); // Server's current date
     const startOfToday = getStartOfDay(today);
     const endOfToday = getEndOfDay(today);
     const todayStats = await calculateStatsForPeriod(operatorId, startOfToday, endOfToday);
-    const todayEfficiency = AVAILABLE_MINUTES_PER_DAY > 0 ? (todayStats.totalEarnedMinutes / AVAILABLE_MINUTES_PER_DAY) * 100 : 0;
+    const todayEfficiency = availableMinutesPerDay > 0 ? (todayStats.totalEarnedMinutes / availableMinutesPerDay) * 100 : 0;
 
     // --- 2. ALWAYS UPDATE THE MONTHLY STATS FOR THE ENTRY DATE'S MONTH ---
     const startOfMonth = new Date(entryDate.getFullYear(), entryDate.getMonth(), 1);
@@ -86,7 +93,7 @@ export async function updateOperatorStats(operatorId: string, entryDate: Date) {
     endOfMonth.setHours(23, 59, 59, 999);
 
     const monthStats = await calculateStatsForPeriod(operatorId, Timestamp.fromDate(startOfMonth), Timestamp.fromDate(endOfMonth));
-    const totalWorkedMinutesInMonth = calculateWorkedMinutes(monthStats.workedDays.size);
+    const totalWorkedMinutesInMonth = calculateWorkedMinutes(monthStats.workedDays.size, config);
     const monthlyEfficiency = calculateMonthlyEfficiency(monthStats.totalEarnedMinutes, totalWorkedMinutesInMonth);
 
     // --- 3. PREPARE AND WRITE THE FIRESTORE DOCUMENT ---

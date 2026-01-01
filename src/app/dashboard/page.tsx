@@ -2,19 +2,14 @@
 
 import { useAuth } from '@/auth-provider';
 import { UserRole } from '@/lib/types';
-import { OperatorLeaderboard } from '@/components/dashboard/leaderboard';
-import { AISuggestions } from '@/components/dashboard/ai-suggestions';
-import { StyleManagement } from '@/components/dashboard/style-management';
-import { ProductionEntry } from '@/components/dashboard/production-entry';
 import { OperatorDashboard } from '@/components/dashboard/operator-dashboard';
-import { OperatorManagement } from '@/components/dashboard/operator-management';
-import { SupervisorManagement } from '@/components/dashboard/supervisor-management';
+import { AdminDashboard } from '@/components/dashboard/admin-dashboard';
+import { SupervisorDashboard } from '@/components/dashboard/supervisor-dashboard';
 import { doc, DocumentReference } from 'firebase/firestore';
 import { useDoc } from '@/firebase/firestore/use-doc';
 import { firestore } from '@/firebase/client';
 import { Loader } from '@/components/loader';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
-import { ProductionLog } from '@/components/dashboard/production-log';
 
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
@@ -34,8 +29,8 @@ export default function DashboardPage() {
     return (
       <div className="fixed inset-0 flex items-center justify-center">
         <div className="text-center">
-            <h2 className="text-xl font-bold text-destructive">Error</h2>
-            <p className="text-muted-foreground">{error?.message || 'An unknown error occurred.'}</p>
+          <h2 className="text-xl font-bold text-destructive">Error</h2>
+          <p className="text-muted-foreground">{error?.message || 'An unknown error occurred.'}</p>
         </div>
       </div>
     );
@@ -53,29 +48,9 @@ export default function DashboardPage() {
         <OperatorDashboard />
       )}
 
-      {role === 'supervisor' && (
-        <div className="grid gap-8 grid-cols-1 lg:grid-cols-2">
-          <ProductionEntry />
-          <AISuggestions />
-          <div className="lg:col-span-2">
-            <ProductionLog />
-          </div>
-          <div className="lg:col-span-2">
-            <OperatorLeaderboard />
-          </div>
-        </div>
-      )}
+      {role === 'supervisor' && <SupervisorDashboard />}
 
-      {role === 'admin' && (
-          <div className="space-y-8">
-          <OperatorLeaderboard />
-          <div className="grid gap-8 grid-cols-1 lg:grid-cols-3">
-            <StyleManagement />
-            <OperatorManagement />
-            <SupervisorManagement />
-          </div>
-        </div>
-      )}
+      {role === 'admin' && <AdminDashboard />}
 
     </div>
   );
