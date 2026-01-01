@@ -274,7 +274,7 @@ export function ProductionEntry() {
                     <SelectContent>
                     {operations.map(op => {
                         const duration = getDurationInMinutes(selectedHourlyRange);
-                        const smv = op.time;
+                        const smv = op.smv;
                         const targetQuantity = duration > 0 && smv > 0 ? Math.floor((duration * 60) / smv) : 0;
                         return (
                           <SelectItem key={op.id} value={op.id}>

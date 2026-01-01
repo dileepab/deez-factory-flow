@@ -1,10 +1,3 @@
-
-export const TARGET_SALARY_LKR = 50000;
-export const WORKING_DAYS_PER_MONTH = 24;
-export const AVAILABLE_MINUTES_PER_DAY = 480; // 8 hours
-export const ATTENDANCE_BONUS_LKR = 5000;
-export const MINUTE_VALUE_LKR = 4.63;
-
 export const MACHINE_TYPES = [
   'Single Needle Lockstitch',
   'Double Needle Lockstitch',

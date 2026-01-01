@@ -1,9 +1,25 @@
+'use client';
+
 import { z } from 'zod';
+import { MACHINE_TYPES } from '@/lib/constants';
 
 export type UserRole = "operator" | "supervisor" | "admin";
 export const UserRoleSchema = z.enum(["operator", "supervisor", "admin"]);
 
-export type MachineType = "single-needle" | "overlock" | "flatlock" | "cover-stitch" | "bartack" | "other";
+export type MachineType = typeof MACHINE_TYPES;
+
+// --- CONFIGURATION TYPE ---
+
+export interface Configuration {
+    id: 'main'; // Singleton document
+    targetSalaryLKR: number;
+    workingDaysPerMonth: number;
+    availableMinutesPerDay: number;
+    attendanceBonusLKR: number;
+    minuteValueLKR: number;
+    holidays: string[]; // Array of dates in 'YYYY-MM-DD' format
+}
+
 
 // --- USER & AUTH TYPES ---
 
@@ -45,22 +61,24 @@ export interface Supervisor extends User {
 
 export interface GarmentOperation {
     id: string;
-    name: string;
-    time: number; // SMV in seconds
-    machineType: MachineType;
-    dependencies?: string[]; // array of operation IDs
-    completedQuantity?: number; // Total units completed for this operation
+    name: string
+    smv: number; // Standard Minute Value
+    machineType: MachineType[number]; // Corrected Type: A single value from the MachineType array
+    dependencies: string[];
+    completedQuantity: number;
 }
 
 export interface GarmentStyle {
     id: string;
     name: string;
+    buyer: string;
     totalSmv: number; // Total SMV for the entire garment in minutes
-    quantity: number;
-    startDate: string;
-    status: "active" | "completed";
     operations: GarmentOperation[];
+    quantity: number;
+    status: 'active' | 'completed';
+    startDate: string;
 }
+
 
 // --- PRODUCTION TYPES ---
 

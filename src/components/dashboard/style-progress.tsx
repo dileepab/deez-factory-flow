@@ -34,7 +34,7 @@ export function StyleProgress({ style }: StyleProgressProps) {
             const operation = style.operations.find(op => op.id === entry.operationId);
             if (!operation) return sum;
 
-            const smvInSeconds = typeof operation.time === 'string' ? parseFloat(operation.time) : operation.time;
+            const smvInSeconds = typeof operation.smv === 'string' ? parseFloat(operation.smv) : operation.smv;
             if (isNaN(smvInSeconds)) return sum;
 
             const earnedMinutes = (entry.cumulativeQuantity || 0) * (smvInSeconds / 60);

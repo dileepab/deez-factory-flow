@@ -2,7 +2,6 @@
 
 import { useAuth } from '@/auth-provider';
 import { UserRole } from '@/lib/types';
-import { PageHeader } from '@/components/shared/page-header';
 import { OperatorLeaderboard } from '@/components/dashboard/leaderboard';
 import { AISuggestions } from '@/components/dashboard/ai-suggestions';
 import { StyleManagement } from '@/components/dashboard/style-management';
@@ -50,50 +49,34 @@ export default function DashboardPage() {
 
   return (
     <div>
-      <PageHeader title={`Welcome, ${user?.displayName || role}`} />
-      <div className="mt-6 grid gap-6 grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+      {role === 'operator' && (
+        <OperatorDashboard />
+      )}
 
-        {role === 'operator' && (
-            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
-                <OperatorDashboard />
-            </div>
-        )}
+      {role === 'supervisor' && (
+        <div className="grid gap-8 grid-cols-1 lg:grid-cols-2">
+          <ProductionEntry />
+          <AISuggestions />
+          <div className="lg:col-span-2">
+            <ProductionLog />
+          </div>
+          <div className="lg:col-span-2">
+            <OperatorLeaderboard />
+          </div>
+        </div>
+      )}
 
-        {role === 'supervisor' && (
-          <>
-            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-2">
-              <ProductionEntry />
-            </div>
-            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-2">
-              <AISuggestions />
-            </div>
-            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
-              <ProductionLog />
-            </div>
-            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
-              <OperatorLeaderboard />
-            </div>
-          </>
-        )}
+      {role === 'admin' && (
+          <div className="space-y-8">
+          <OperatorLeaderboard />
+          <div className="grid gap-8 grid-cols-1 lg:grid-cols-3">
+            <StyleManagement />
+            <OperatorManagement />
+            <SupervisorManagement />
+          </div>
+        </div>
+      )}
 
-        {role === 'admin' && (
-          <>
-            <div className="col-span-1 md:col-span-2 lg:col-span-3 xl:col-span-4">
-                <OperatorLeaderboard />
-            </div>
-            <div className="col-span-1 md:col-span-2">
-                <StyleManagement />
-            </div>
-            <div className="col-span-1">
-                <OperatorManagement />
-            </div>
-            <div className="col-span-1">
-                <SupervisorManagement />
-            </div>
-          </>
-        )}
-
-      </div>
     </div>
   );
 }

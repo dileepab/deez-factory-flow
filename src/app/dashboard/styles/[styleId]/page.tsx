@@ -66,13 +66,14 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
         const newOperationData: GarmentOperation = { 
           id: nanoid(),
           name: newOperation, 
-          time: parseInt(newOperationTime, 10), 
+          smv: parseInt(newOperationTime, 10), 
           machineType: newMachineType, 
-          dependencies: newDependencies
+          dependencies: newDependencies,
+          completedQuantity: 0
         };
 
         const newOperations = [...currentOperations, newOperationData];
-        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.time, 0);
+        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.smv, 0);
         const newTotalSmv = totalSmvInSeconds / 60; // Convert to minutes
 
         transaction.update(styleRef, {
@@ -92,7 +93,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
   const handleStartEdit = (op: GarmentOperation, index: number) => {
     setEditingOperation({ op, index });
     setNewOperation(op.name);
-    setNewOperationTime(String(op.time));
+    setNewOperationTime(String(op.smv));
     setNewMachineType(op.machineType);
     setNewDependencies(op.dependencies || []);
   };
@@ -121,7 +122,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
         const updatedOperation: GarmentOperation = {
           ...editingOperation.op,
           name: newOperation,
-          time: parseInt(newOperationTime, 10),
+          smv: parseInt(newOperationTime, 10),
           machineType: newMachineType,
           dependencies: newDependencies
         };
@@ -129,7 +130,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
         const newOperations = [...currentOperations];
         newOperations[editingOperation.index] = updatedOperation;
 
-        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.time, 0);
+        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.smv, 0);
         const newTotalSmv = totalSmvInSeconds / 60; // Convert to minutes
 
         transaction.update(styleRef, {
@@ -177,7 +178,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
           }
         });
 
-        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.time, 0);
+        const totalSmvInSeconds = newOperations.reduce((sum, op: GarmentOperation) => sum + op.smv, 0);
         const newTotalSmv = totalSmvInSeconds / 60; // Convert to minutes
 
         transaction.update(styleRef, {
@@ -281,7 +282,7 @@ export default function StyleDetailPage({ params }: { params: Promise<{ styleId:
               <li key={op.id} className="flex items-center justify-between p-3 bg-gray-100 rounded-md dark:bg-gray-800">
                 <div className="flex flex-col sm:flex-row sm:items-center sm:gap-4">
                   <span className="font-semibold">{op.name}</span>
-                  <span className="text-sm text-gray-500 dark:text-gray-400">{op.time}s</span>
+                  <span className="text-sm text-gray-500 dark:text-gray-400">{op.smv}s</span>
                   <Badge variant="outline">{op.machineType}</Badge>
                   {op.dependencies && op.dependencies.length > 0 && (
                     <div className="flex items-center gap-2 mt-2 sm:mt-0">

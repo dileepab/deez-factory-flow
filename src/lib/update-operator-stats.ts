@@ -48,8 +48,8 @@ async function calculateStatsForPeriod(operatorId: string, startDate: Timestamp,
 
     for (const entry of productions) {
         const operation = allOperations.find(op => op.id === entry.operationId);
-        if (operation && operation.time) {
-            const smvInSeconds = operation.time;
+        if (operation && operation.smv) {
+            const smvInSeconds = operation.smv;
             const earnedMinutesForEntry = (entry.cumulativeQuantity || 0) * (smvInSeconds / 60);
             totalEarnedMinutes += earnedMinutesForEntry;
             earnedMinutesByStyle[entry.styleId] = (earnedMinutesByStyle[entry.styleId] || 0) + earnedMinutesForEntry;

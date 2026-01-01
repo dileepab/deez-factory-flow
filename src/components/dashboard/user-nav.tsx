@@ -12,10 +12,20 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/auth-provider';
-import { auth } from '@/firebase/client';
+import { auth, firestore } from '@/firebase/client';
+import { useDoc } from '@/firebase/firestore/use-doc';
+import { doc, DocumentReference } from 'firebase/firestore';
+import { useMemoFirebase } from '@/firebase/use-memo-firebase';
+import type { UserRole } from '@/lib/types';
+import Link from 'next/link';
 
 export function UserNav() {
   const { user } = useAuth();
+  const userDocRef = useMemoFirebase<DocumentReference | null>(
+    () => (user ? doc(firestore, 'users', user.uid) : null),
+    [user]
+  );
+  const { data: userData } = useDoc<{ role: UserRole }>(userDocRef);
 
   const handleLogout = async () => {
     await auth.signOut();
@@ -48,8 +58,11 @@ export function UserNav() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
-              <DropdownMenuItem>Profile</DropdownMenuItem>
-              <DropdownMenuItem>Settings</DropdownMenuItem>
+              {userData?.role === 'admin' && (
+                <Link href="/dashboard/settings" passHref>
+                    <DropdownMenuItem>Settings</DropdownMenuItem>
+                </Link>
+              )}
             </DropdownMenuGroup>
             <DropdownMenuSeparator />
             <DropdownMenuItem onClick={handleLogout}>Log out</DropdownMenuItem>

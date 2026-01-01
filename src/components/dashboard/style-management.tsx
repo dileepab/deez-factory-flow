@@ -2,9 +2,11 @@
 
 import { useState, useMemo } from 'react';
 import { useCollection } from '@/firebase/firestore/use-collection';
+import { useConfiguration } from '@/firebase/firestore/use-configuration';
 import { firestore } from '@/firebase/client';
 import { collection, query, where, doc, addDoc, updateDoc, deleteDoc, writeBatch, getDoc, getDocs } from 'firebase/firestore';
-import type { GarmentStyle, GarmentOperation } from '@/lib/types';
+import type { GarmentStyle, GarmentOperation, MachineType } from '@/lib/types';
+import { MACHINE_TYPES } from '@/lib/constants';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -12,7 +14,8 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogDescription, DialogClose } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { PlusCircle, Edit, Trash, Loader2, MoreVertical, ChevronDown } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { PlusCircle, Edit, Trash, Loader2, MoreVertical, Settings2 } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "@/components/ui/alert-dialog";
 import { Progress } from '@/components/ui/progress';
@@ -20,10 +23,10 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { StyleProgress } from '@/components/dashboard/style-progress';
-import { MINUTE_VALUE_LKR } from '@/lib/constants';
 
 export function StyleManagement() {
   const { toast } = useToast();
+  const { data: config, isLoading: isConfigLoading } = useConfiguration(); 
   const [statusFilter, setStatusFilter] = useState<'active' | 'completed'>('active');
 
   const [isNewStyleDialogOpen, setIsNewStyleDialogOpen] = useState(false);
@@ -39,11 +42,14 @@ export function StyleManagement() {
   const [newStyleQuantity, setNewStyleQuantity] = useState<number>(0);
   const [newOperationName, setNewOperationName] = useState("");
   const [newOperationTime, setNewOperationTime] = useState<number>(0);
+  const [newMachineType, setNewMachineType] = useState<MachineType[number]>(MACHINE_TYPES[0]);
 
   const stylesQuery = useMemoFirebase(() => firestore ? query(collection(firestore, 'styles'), where('status', '==', statusFilter)) : null, [statusFilter]);
-  const { data: styles, isLoading, error } = useCollection<GarmentStyle>(stylesQuery);
+  const { data: styles, isLoading: areStylesLoading, error: stylesError } = useCollection<GarmentStyle>(stylesQuery);
 
-  const handleSaveNewStyle = async (e: React.FormEvent) => {
+  const isLoading = areStylesLoading || isConfigLoading;
+  
+   const handleSaveNewStyle = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!firestore || !newStyleName || newStyleQuantity <= 0) return;
     try {
@@ -90,11 +96,13 @@ export function StyleManagement() {
     if (operation) {
       setCurrentOperation(operation);
       setNewOperationName(operation.name || "");
-      setNewOperationTime(operation.time || 0);
+      setNewOperationTime(operation.smv || 0);
+      setNewMachineType(operation.machineType || MACHINE_TYPES[0]);
     } else {
       setCurrentOperation(null);
       setNewOperationName("");
       setNewOperationTime(0);
+      setNewMachineType(MACHINE_TYPES[0]);
     }
     setIsOperationDialogOpen(true);
   };
@@ -118,17 +126,17 @@ export function StyleManagement() {
     if (currentOperation && currentOperation.id) { // Editing existing operation
       const opIndex = newOperations.findIndex(op => op.id === currentOperation.id);
       if (opIndex > -1) {
-        const oldTimeInMinutes = (newOperations[opIndex].time || 0) / 60;
+        const oldTimeInMinutes = (newOperations[opIndex].smv || 0) / 60;
         newTotalSmvInMinutes = newTotalSmvInMinutes - oldTimeInMinutes + operationTimeInMinutes;
-        newOperations[opIndex] = { ...newOperations[opIndex], name: newOperationName, time: newOperationTime };
+        newOperations[opIndex] = { ...newOperations[opIndex], name: newOperationName, smv: newOperationTime, machineType: newMachineType };
       }
     } else { // Adding new operation
       newOperations.push({ 
         id: `op_${Date.now()}`,
         name: newOperationName, 
-        time: newOperationTime, 
+        smv: newOperationTime, 
         completedQuantity: 0, 
-        machineType: 'other', 
+        machineType: newMachineType, 
         dependencies: [],
       });
       newTotalSmvInMinutes += operationTimeInMinutes;
@@ -136,7 +144,7 @@ export function StyleManagement() {
 
     try {
       await updateDoc(styleRef, { operations: newOperations, totalSmv: newTotalSmvInMinutes });
-      toast({ title: `Operation ${currentOperation ? 'Updated' : 'Added'}`, description: `Operation "${newOperationName}" has been saved.` });
+      toast({ title: `Operation ${currentOperation ? 'Updated' : 'Saved'}` });
       setIsOperationDialogOpen(false);
       setCurrentStyle(null);
       setCurrentOperation(null);
@@ -179,7 +187,7 @@ export function StyleManagement() {
               const styleData = styleDoc.data() as GarmentStyle;
               const operationToRemove = styleData.operations.find(op => op.id === opId);
               const newOperations = styleData.operations.filter(op => op.id !== opId);
-              const newTotalSmv = styleData.totalSmv - ((operationToRemove?.time || 0) / 60);
+              const newTotalSmv = styleData.totalSmv - ((operationToRemove?.smv || 0) / 60);
               await updateDoc(styleRef, { operations: newOperations, totalSmv: newTotalSmv });
               toast({ title: 'Operation Deleted', description: 'The operation has been removed from the style.' });
           }
@@ -190,6 +198,36 @@ export function StyleManagement() {
           setOperationToDelete(null);
       }
   };
+
+  if (isLoading) {
+      return (
+          <Card>
+              <CardHeader>
+                  <CardTitle>Garment Style Management</CardTitle>
+                  <CardDescription>Loading style data...</CardDescription>
+              </CardHeader>
+              <CardContent className="flex items-center justify-center h-48">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+              </CardContent>
+          </Card>
+      );
+  }
+
+  if (!config) {
+    return (
+      <Card className="border-destructive">
+        <CardHeader>
+          <CardTitle className="text-destructive flex items-center"><Settings2 className="mr-2"/> Configuration Error</CardTitle>
+          <CardDescription className="text-destructive">
+            Could not load the application&apos;s main configuration. The Style Management features cannot be used.
+          </CardDescription>
+        </CardHeader>
+         <CardContent>
+             <p>Please ensure the main configuration is correctly set up in the database by an administrator.</p>
+        </CardContent>
+      </Card>
+    );
+  }
 
   return (
     <>
@@ -210,80 +248,75 @@ export function StyleManagement() {
                         <TabsTrigger value="completed">Completed</TabsTrigger>
                     </TabsList>
                     <TabsContent value={statusFilter} className="pt-4">
-                        {isLoading && <div className="flex items-center justify-center h-48"><Loader2 className="h-8 w-8 animate-spin" /></div>}
-                        {error && <div className="text-red-500 text-center">Error loading styles: {error.message}</div>}
-                        {!isLoading && !error && styles && styles.length > 0 ? (
+                        {areStylesLoading && <div className="flex items-center justify-center h-48"><Loader2 className="h-8 w-8 animate-spin" /></div>}
+                        {stylesError && <div className="text-red-500 text-center">Error loading styles: {stylesError.message}</div>}
+                        {!areStylesLoading && !stylesError && styles && styles.length > 0 ? (
                             <Accordion type="multiple" className="space-y-4">
-                                {styles.map(style => {
-                                    return (
-                                        <AccordionItem key={style.id} value={style.id} asChild>
-                                            <Card className="overflow-hidden">
-                                                <div className="flex items-center bg-muted/50 data-[state=closed]:rounded-lg">
-                                                  <div className="flex-1 flex p-4 flex-col">
-                                                    <div className='flex flex-row justify-between items-center'>
+                                {styles.map(style => (
+                                    <AccordionItem key={style.id} value={style.id} asChild>
+                                        <Card className="overflow-hidden">
+                                            <AccordionTrigger className='data-[state=closed]:rounded-lg'>
+                                                <div className="flex flex-1 items-center bg-muted/50 p-4">
+                                                    <div className="flex-1 flex flex-col text-left">
                                                         <CardTitle className="text-lg">{style.name}</CardTitle>
-                                                        <AccordionTrigger className='py-2'/>
+                                                        <CardDescription className="mt-1 flex flex-col">
+                                                            <span>Quantity: {style.quantity} units</span>
+                                                            <span>Total SMV: {style.totalSmv.toFixed(2)} min</span>
+                                                        </CardDescription>
                                                     </div>
-                                                    <div className='flex flex-row justify-between items-center'>
-                                                        <div className="flex items-center gap-4 text-left">
-                                                            <CardDescription className="mt-1 flex flex-col">
-                                                                    <span>Quantity: {style.quantity} units</span><span>Total SMV: {style.totalSmv.toFixed(2)} min</span>
-                                                            </CardDescription>
-                                                      </div>
-                                                      <div className="flex items-center gap-2 pr-2">
-                                                          <div className="w-32 text-right">
+                                                    <div className="flex items-center gap-2 pr-2">
+                                                        <div className="w-32 text-right">
                                                             <StyleProgress style={style} />
-                                                          </div>
-                                                      </div>
-
-                                                      <DropdownMenu>
-                                                                <DropdownMenuTrigger asChild>
-                                                                    <Button variant="ghost" className="h-8 w-8 p-0">
-                                                                        <span className="sr-only">Open menu</span>
-                                                                        <MoreVertical className="h-4 w-4" />
-                                                                    </Button>
-                                                                </DropdownMenuTrigger>
-                                                                <DropdownMenuContent align="end">
-                                                                    <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                                                                    <DropdownMenuItem onClick={() => handleOpenEditStyleDialog(style)}>
-                                                                        <Edit className="mr-2 h-4 w-4" /> Edit Style
-                                                                    </DropdownMenuItem>
-                                                                    <DropdownMenuItem onClick={() => handleOpenOperationDialog(style)}>
-                                                                        <PlusCircle className="mr-2 h-4 w-4" /> Add Operation
-                                                                    </DropdownMenuItem>
-                                                                    <DropdownMenuSeparator />
-                                                                    <DropdownMenuItem onClick={() => setStyleToDelete(style)} className="text-red-600">
-                                                                        <Trash className="mr-2 h-4 w-4" /> Delete Style
-                                                                    </DropdownMenuItem>
-                                                                </DropdownMenuContent>
-                                                            </DropdownMenu>
+                                                        </div>
+                                                        <DropdownMenu>
+                                                            <DropdownMenuTrigger asChild>
+                                                                <Button variant="ghost" className="h-8 w-8 p-0">
+                                                                    <span className="sr-only">Open menu</span>
+                                                                    <MoreVertical className="h-4 w-4" />
+                                                                </Button>
+                                                            </DropdownMenuTrigger>
+                                                            <DropdownMenuContent align="end">
+                                                                <DropdownMenuLabel>Actions</DropdownMenuLabel>
+                                                                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleOpenEditStyleDialog(style); }}>
+                                                                    <Edit className="mr-2 h-4 w-4" /> Edit Style
+                                                                </DropdownMenuItem>
+                                                                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleOpenOperationDialog(style); }}>
+                                                                    <PlusCircle className="mr-2 h-4 w-4" /> Add Operation
+                                                                </DropdownMenuItem>
+                                                                <DropdownMenuSeparator />
+                                                                <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setStyleToDelete(style); }} className="text-red-600">
+                                                                    <Trash className="mr-2 h-4 w-4" /> Delete Style
+                                                                </DropdownMenuItem>
+                                                            </DropdownMenuContent>
+                                                        </DropdownMenu>
                                                     </div>
-                                                      
-                                                  </div>
                                                 </div>
-                                                <AccordionContent className="p-0 border-t">
-                                                    <Table>
-                                                        <TableHeader>
-                                                            <TableRow>
-                                                                <TableHead className="w-1/2">Operation</TableHead>
-                                                                <TableHead>SMV (s)</TableHead>
-                                                                <TableHead>Cost</TableHead>
-                                                                <TableHead className="w-1/4 text-center">Progress</TableHead>
-                                                                <TableHead className="text-right">Actions</TableHead>
-                                                            </TableRow>
-                                                        </TableHeader>
-                                                        <TableBody>
-                                                            {style.operations && style.operations.length > 0 ? style.operations.map(op => {
+                                            </AccordionTrigger>
+                                            <AccordionContent className="p-0 border-t">
+                                                <Table>
+                                                    <TableHeader>
+                                                        <TableRow>
+                                                            <TableHead className="w-2/5">Operation</TableHead>
+                                                            <TableHead>Machine</TableHead>
+                                                            <TableHead>SMV (s)</TableHead>
+                                                            <TableHead>Cost</TableHead>
+                                                            <TableHead className="w-1/4 text-center">Progress</TableHead>
+                                                            <TableHead className="text-right">Actions</TableHead>
+                                                        </TableRow>
+                                                    </TableHeader>
+                                                    <TableBody>
+                                                        {style.operations && style.operations.length > 0 ? style.operations.map(op => {
                                                             const progress = style.quantity > 0 ? ((op.completedQuantity || 0) / style.quantity) * 100 : 0;
                                                             return (
                                                                 <TableRow key={op.id}>
                                                                     <TableCell className="font-medium">{op.name}</TableCell>
-                                                                    <TableCell>{op.time}</TableCell>
-                                                                    <TableCell>Rs. {((op.time / 60) * MINUTE_VALUE_LKR).toFixed(2)}</TableCell>
+                                                                    <TableCell className="text-muted-foreground">{op.machineType}</TableCell>
+                                                                    <TableCell>{op.smv}</TableCell>
+                                                                    <TableCell>Rs. {((op.smv / 60) * config.minuteValueLKR).toFixed(2)}</TableCell>
                                                                     <TableCell className="text-center">
-                                                                        <div className="flex items-stretch flex-col gap-2">
+                                                                        <div className="flex items-center flex-col gap-1">
                                                                             <Progress value={progress} className="h-2 w-full" />
-                                                                            <span className="text-xs font-medium w-full text-right">{(op.completedQuantity || 0)} - {Math.min(100, progress).toFixed(0)}%</span>
+                                                                            <span className="text-xs font-medium w-full text-right">{op.completedQuantity || 0} / {style.quantity}</span>
                                                                         </div>
                                                                     </TableCell>
                                                                     <TableCell className="text-right">
@@ -296,23 +329,22 @@ export function StyleManagement() {
                                                                     </TableCell>
                                                                 </TableRow>
                                                             )
-                                                            }) : (
-                                                                <TableRow>
-                                                                    <TableCell colSpan={5} className="text-center h-24 text-muted-foreground">
-                                                                        No operations defined. <Button variant="link" className="p-0 h-auto" onClick={() => handleOpenOperationDialog(style)}>Add one now</Button>.
-                                                                    </TableCell>
-                                                                </TableRow>
-                                                            )}
-                                                        </TableBody>
-                                                    </Table>
-                                                </AccordionContent>
-                                            </Card>
-                                        </AccordionItem>
-                                    );
-                                })}
+                                                        }) : (
+                                                            <TableRow>
+                                                                <TableCell colSpan={6} className="text-center h-24 text-muted-foreground">
+                                                                    No operations defined. <Button variant="link" className="p-0 h-auto" onClick={() => handleOpenOperationDialog(style)}>Add one now</Button>.
+                                                                </TableCell>
+                                                            </TableRow>
+                                                        )}
+                                                    </TableBody>
+                                                </Table>
+                                            </AccordionContent>
+                                        </Card>
+                                    </AccordionItem>
+                                ))}
                             </Accordion>
                         ) : (
-                            !isLoading && <div className="text-center text-muted-foreground py-12">
+                            !areStylesLoading && <div className="text-center text-muted-foreground py-12">
                                 <p>No {statusFilter} styles found.</p>
                             </div>
                         )}
@@ -385,6 +417,19 @@ export function StyleManagement() {
                         <div className="grid grid-cols-4 items-center gap-4">
                             <Label htmlFor="op-time" className="text-right">Time (s)</Label>
                             <Input id="op-time" type="number" value={newOperationTime} onChange={(e) => setNewOperationTime(Number(e.target.value))} className="col-span-3" required min="1" />
+                        </div>
+                        <div className="grid grid-cols-4 items-center gap-4">
+                            <Label htmlFor="op-machine" className="text-right">Machine</Label>
+                            <Select value={newMachineType} onValueChange={(value) => setNewMachineType(value as MachineType[number])}>
+                                <SelectTrigger className="col-span-3">
+                                    <SelectValue placeholder="Select a machine" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                    {MACHINE_TYPES.map(type => (
+                                        <SelectItem key={type} value={type}>{type}</SelectItem>
+                                    ))}
+                                </SelectContent>
+                            </Select>
                         </div>
                     </div>
                     <DialogFooter>
