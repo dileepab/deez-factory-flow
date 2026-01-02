@@ -61,8 +61,11 @@ async function calculateStatsForPeriod(operatorId: string, startDate: Timestamp,
     let equivalentGarments = 0;
     for (const styleId in earnedMinutesByStyle) {
         const style = styles.find(s => s.id === styleId);
-        if (style && style.totalSmv > 0) {
-            equivalentGarments += earnedMinutesByStyle[styleId] / style.totalSmv;
+        const totalSmvSeconds = style?.operations.reduce((sum, op) => sum + (Number(op.smv) || 0), 0) || style?.totalSmv || 0;
+
+        if (totalSmvSeconds > 0) {
+            const totalSmvMinutes = totalSmvSeconds / 60;
+            equivalentGarments += earnedMinutesByStyle[styleId] / totalSmvMinutes;
         }
     }
 
@@ -116,6 +119,7 @@ export async function updateOperatorStats(operatorId: string, entryDate: Date) {
                 totalEarnedMinutes: monthStats.totalEarnedMinutes,
                 daysWorked: monthStats.workedDays.size,
                 monthlyEfficiency: Math.round(monthlyEfficiency),
+                equivalentGarments: monthStats.equivalentGarments,
             },
         },
     };

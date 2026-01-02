@@ -5,6 +5,8 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { OperatorLeaderboard } from '@/components/dashboard/leaderboard';
 import { StyleManagement } from '@/components/dashboard/style-management';
+import { HourlyEfficiencyChart } from '@/components/dashboard/hourly-efficiency-chart';
+import { BottleneckAnalysis } from '@/components/dashboard/bottleneck-analysis';
 import { OperatorManagement } from '@/components/dashboard/operator-management';
 import { SupervisorManagement } from '@/components/dashboard/supervisor-management';
 import { ProductionEntry } from '@/components/dashboard/production-entry';
@@ -14,9 +16,12 @@ import { collection, query, where, orderBy, limit } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { startOfDay, subDays, format } from 'date-fns';
+import { useConfiguration } from '@/firebase/firestore/use-configuration';
+import { startOfDay, subDays, format, startOfMonth } from 'date-fns';
+import type { GarmentStyle } from '@/lib/types';
 
 export function AdminDashboard() {
+    const { data: config } = useConfiguration();
     // --- Data Fetching ---
 
     // 1. Operators (for total count)
@@ -31,19 +36,17 @@ export function AdminDashboard() {
         () => query(collection(firestore, 'styles'), where('status', '==', 'active')),
         []
     );
-    const { data: styles } = useCollection(stylesQuery);
+    const { data: styles } = useCollection<GarmentStyle>(stylesQuery);
 
-    // 3. Production Data (Last 7 days for chart)
-    // Note: optimized query should ideally rely on a pre-aggregated 'daily_stats' collection.
-    // For now, we'll fetch recent production logs. This might be heavy in production!
-    const sevenDaysAgo = startOfDay(subDays(new Date(), 7));
+    // 3. Production Data (This Month)
+    const monthStart = startOfMonth(new Date());
     const productionQuery = useMemoFirebase(
         () => query(
             collection(firestore, 'production'),
-            where('timestamp', '>=', sevenDaysAgo),
+            where('timestamp', '>=', monthStart),
             orderBy('timestamp', 'asc')
         ),
-        [] // Dependencies
+        []
     );
     const { data: productionLogs } = useCollection(productionQuery);
 
@@ -53,23 +56,67 @@ export function AdminDashboard() {
     const stats = useMemo(() => {
         const totalOperators = operators?.length || 0;
         const activeStylesCount = styles?.length || 0;
+        const availableMinutes = config?.availableMinutesPerDay || 480;
 
-        // Calculate today's production
+        let todayProd = 0;
+        let monthProd = 0;
+        let todayEarned = 0;
+        let monthEarned = 0;
+
         const todayStr = format(new Date(), 'yyyy-MM-dd');
-        const todayProduction = productionLogs?.filter(log =>
-            format(log.timestamp.toDate(), 'yyyy-MM-dd') === todayStr
-        ).reduce((sum, log) => sum + (log.cumulativeQuantity || 0), 0) || 0;
+        const uniqueDays = new Set<string>();
 
-        // Calculate Factory Average Efficiency (mock logic for now as it requires complex aggregation)
-        // In a real app, this would be an aggregation field on the user or a daily stat doc.
-        const avgEfficiency = 78; // Placeholder / Target
+        productionLogs?.forEach(log => {
+            const logDateStr = format(log.timestamp.toDate(), 'yyyy-MM-dd');
+            uniqueDays.add(logDateStr);
+            const isToday = logDateStr === todayStr;
 
-        return { totalOperators, activeStylesCount, todayProduction, avgEfficiency };
-    }, [operators, styles, productionLogs]);
+            const style = styles?.find(s => s.id === log.styleId);
+            if (!style) return;
+
+            // Equivalent Garments
+            const styleTotalSmv = style.operations.reduce((acc, op) => acc + (Number(op.smv) || 0), 0);
+            const operation = style.operations.find(op => op.id === log.operationId);
+            const opSmvSeconds = Number(operation?.smv) || 0;
+            const opSmvMinutes = opSmvSeconds / 60;
+
+            // Prod
+            if (styleTotalSmv > 0) {
+                const eq = ((log.cumulativeQuantity || 0) * opSmvSeconds) / styleTotalSmv;
+                monthProd += eq;
+                if (isToday) todayProd += eq;
+            }
+
+            // Earned Minutes (for Efficiency)
+            const earned = (log.cumulativeQuantity || 0) * opSmvMinutes;
+            monthEarned += earned;
+            if (isToday) todayEarned += earned;
+        });
+
+        // Efficiency Calculations
+        // Denominator: ActiveOperators * AvailableMinutes
+        // Note: Ideally we use 'Attendance' but 'All Operators' is a safe baseline for 'Factory Capacity'.
+        const dailyCapacity = totalOperators * availableMinutes;
+
+        const todayEfficiency = dailyCapacity > 0 ? (todayEarned / dailyCapacity) * 100 : 0;
+
+        const workedDays = uniqueDays.size || 1;
+        const monthCapacity = dailyCapacity * workedDays;
+        const monthEfficiency = monthCapacity > 0 ? (monthEarned / monthCapacity) * 100 : 0;
+
+        return {
+            totalOperators,
+            activeStylesCount,
+            todayProduction: todayProd,
+            monthProduction: monthProd,
+            todayEfficiency, // Raw %
+            monthEfficiency
+        };
+    }, [operators, styles, productionLogs, config]);
 
 
     const chartData = useMemo(() => {
-        if (!productionLogs) return [];
+        if (!productionLogs || !styles) return [];
 
         const dataMap = new Map<string, number>();
 
@@ -83,12 +130,20 @@ export function AdminDashboard() {
         productionLogs.forEach(log => {
             const date = format(log.timestamp.toDate(), 'MMM dd');
             if (dataMap.has(date)) {
-                dataMap.set(date, (dataMap.get(date) || 0) + (log.cumulativeQuantity || 0));
+                // Calculate Earned Minutes (Efficiency Count)
+                const style = styles.find(s => s.id === log.styleId);
+                const operation = style?.operations?.find(op => op.id === log.operationId);
+
+                // SMV is in seconds, convert to minutes for Earned Minutes
+                const smvSeconds = Number(operation?.smv) || 0;
+                const earnedMinutes = (log.cumulativeQuantity || 0) * (smvSeconds / 60);
+
+                dataMap.set(date, (dataMap.get(date) || 0) + earnedMinutes);
             }
         });
 
         return Array.from(dataMap.entries()).map(([date, total]) => ({ date, total }));
-    }, [productionLogs]);
+    }, [productionLogs, styles]);
 
 
     return (
@@ -101,19 +156,25 @@ export function AdminDashboard() {
                         <Activity className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{stats.todayProduction} units</div>
-                        <p className="text-xs text-muted-foreground">Produced today</p>
+                        <div className="text-2xl font-bold">{stats.todayProduction.toFixed(1)}</div>
+                        <p className="text-xs text-muted-foreground">Today (Equivalent)</p>
+                        <div className="pt-2 mt-2 border-t text-sm font-medium text-muted-foreground">
+                            Month: {Math.round(stats.monthProduction)} units
+                        </div>
                     </CardContent>
                 </Card>
 
                 <Card>
                     <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-                        <CardTitle className="text-sm font-medium">Avg. Efficiency</CardTitle>
+                        <CardTitle className="text-sm font-medium">Efficiency</CardTitle>
                         <BarChart className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{stats.avgEfficiency}%</div>
-                        <p className="text-xs text-muted-foreground">Factory wide average</p>
+                        <div className="text-2xl font-bold">{Math.round(stats.todayEfficiency)}%</div>
+                        <p className="text-xs text-muted-foreground">Platform Efficiency (Today)</p>
+                        <div className="pt-2 mt-2 border-t text-sm font-medium text-muted-foreground">
+                            Month: {Math.round(stats.monthEfficiency)}%
+                        </div>
                     </CardContent>
                 </Card>
 
@@ -140,9 +201,9 @@ export function AdminDashboard() {
                 </Card>
             </div>
 
-            {/* Middle Section: Chart */}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
-                <Card className="col-span-4">
+            {/* Middle Section: Weekly Trend & Leaderboard */}
+            <div className="grid gap-4 grid-cols-1 lg:grid-cols-7">
+                <Card className="lg:col-span-4">
                     <CardHeader>
                         <CardTitle>Production Trend</CardTitle>
                         <CardDescription>Daily production output for the last 7 days.</CardDescription>
@@ -158,7 +219,7 @@ export function AdminDashboard() {
                                         </linearGradient>
                                     </defs>
                                     <XAxis dataKey="date" stroke="#888888" fontSize={12} tickLine={false} axisLine={false} />
-                                    <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `${value}`} />
+                                    <YAxis stroke="#888888" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(value) => `${value} `} />
                                     <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e5e5" />
                                     <Tooltip />
                                     <Area type="monotone" dataKey="total" stroke="#2563eb" fillOpacity={1} fill="url(#colorTotal)" />
@@ -168,9 +229,14 @@ export function AdminDashboard() {
                     </CardContent>
                 </Card>
 
-                <OperatorLeaderboard limit={5} className="col-span-3" />
+                <OperatorLeaderboard limit={5} className="lg:col-span-3" />
             </div>
 
+            {/* New Analytics Section */}
+            <div className="grid gap-4 grid-cols-1 lg:grid-cols-7">
+                <HourlyEfficiencyChart className="lg:col-span-4" />
+                <BottleneckAnalysis className="lg:col-span-3" />
+            </div>
 
             {/* Bottom Section: Management Tools (Tabs) */}
             <Tabs defaultValue="styles" className="space-y-4">

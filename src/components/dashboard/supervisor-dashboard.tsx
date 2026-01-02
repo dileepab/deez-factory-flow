@@ -13,18 +13,22 @@ import { useCollection } from '@/firebase/firestore/use-collection';
 import { collection, query, where, orderBy } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
-import { startOfDay, format } from 'date-fns';
+import { HourlyEfficiencyChart } from '@/components/dashboard/hourly-efficiency-chart';
+import { BottleneckAnalysis } from '@/components/dashboard/bottleneck-analysis';
+import { useConfiguration } from '@/firebase/firestore/use-configuration';
+import { startOfDay, format, startOfMonth } from 'date-fns';
 
 export function SupervisorDashboard() {
+    const { data: config } = useConfiguration();
     // --- Data Fetching for Stats ---
     // (Reusing similar logic to Admin Dashboard for consistency, can be extracted to a hook later)
 
-    // 1. Production Data (Today)
-    const today = startOfDay(new Date());
+    // 1. Production Data (This Month)
+    const monthStart = startOfMonth(new Date());
     const productionQuery = useMemoFirebase(
         () => query(
             collection(firestore, 'production'),
-            where('timestamp', '>=', today),
+            where('timestamp', '>=', monthStart),
             orderBy('timestamp', 'asc')
         ),
         []
@@ -47,13 +51,58 @@ export function SupervisorDashboard() {
 
 
     const stats = useMemo(() => {
-        const todayProduction = productionLogs?.reduce((sum, log) => sum + (log.cumulativeQuantity || 0), 0) || 0;
         const totalOperators = operators?.length || 0;
         const activeStylesCount = styles?.length || 0;
-        const avgEfficiency = 82; // Placeholder until factory-wide agg is ready
+        const availableMinutes = config?.availableMinutesPerDay || 480;
 
-        return { todayProduction, totalOperators, activeStylesCount, avgEfficiency };
-    }, [productionLogs, operators, styles]);
+        let todayProd = 0;
+        let monthProd = 0;
+        let todayEarned = 0;
+        let monthEarned = 0;
+
+        const todayStr = format(new Date(), 'yyyy-MM-dd');
+        const uniqueDays = new Set<string>();
+
+        productionLogs?.forEach(log => {
+            const logDateStr = format(log.timestamp.toDate(), 'yyyy-MM-dd');
+            uniqueDays.add(logDateStr);
+            const isToday = logDateStr === todayStr;
+
+            const style = styles?.find(s => s.id === log.styleId);
+            if (!style) return;
+
+            const styleTotalSmv = style.operations.reduce((acc, op) => acc + (Number(op.smv) || 0), 0);
+            const operation = style.operations.find(op => op.id === log.operationId);
+            const opSmvSeconds = Number(operation?.smv) || 0;
+            const opSmvMinutes = opSmvSeconds / 60;
+
+            if (styleTotalSmv > 0) {
+                const eq = ((log.cumulativeQuantity || 0) * opSmvSeconds) / styleTotalSmv;
+                monthProd += eq;
+                if (isToday) todayProd += eq;
+            }
+
+            const earned = (log.cumulativeQuantity || 0) * opSmvMinutes;
+            monthEarned += earned;
+            if (isToday) todayEarned += earned;
+        });
+
+        const dailyCapacity = totalOperators * availableMinutes;
+        const todayEfficiency = dailyCapacity > 0 ? (todayEarned / dailyCapacity) * 100 : 0;
+
+        const workedDays = uniqueDays.size || 1;
+        const monthCapacity = dailyCapacity * workedDays;
+        const monthEfficiency = monthCapacity > 0 ? (monthEarned / monthCapacity) * 100 : 0;
+
+        return {
+            totalOperators,
+            activeStylesCount,
+            todayProduction: todayProd,
+            monthProduction: monthProd,
+            todayEfficiency,
+            monthEfficiency
+        };
+    }, [productionLogs, operators, styles, config]);
 
     return (
         <div className="space-y-8">
@@ -65,8 +114,11 @@ export function SupervisorDashboard() {
                         <Activity className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{stats.todayProduction}</div>
-                        <p className="text-xs text-muted-foreground">Units produced today</p>
+                        <div className="text-2xl font-bold">{stats.todayProduction.toFixed(1)}</div>
+                        <p className="text-xs text-muted-foreground">Today (Equivalent)</p>
+                        <div className="pt-2 mt-2 border-t text-sm font-medium text-muted-foreground">
+                            Month: {Math.round(stats.monthProduction)} units
+                        </div>
                     </CardContent>
                 </Card>
                 <Card>
@@ -75,8 +127,11 @@ export function SupervisorDashboard() {
                         <BarChart className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{stats.avgEfficiency}%</div>
-                        <p className="text-xs text-muted-foreground">Average efficiency</p>
+                        <div className="text-2xl font-bold">{Math.round(stats.todayEfficiency)}%</div>
+                        <p className="text-xs text-muted-foreground">Efficiency (Today)</p>
+                        <div className="pt-2 mt-2 border-t text-sm font-medium text-muted-foreground">
+                            Month: {Math.round(stats.monthEfficiency)}%
+                        </div>
                     </CardContent>
                 </Card>
                 <Card>
@@ -109,6 +164,10 @@ export function SupervisorDashboard() {
                 </TabsList>
 
                 <TabsContent value="overview" className="space-y-4">
+                    <div className="grid gap-4 grid-cols-1 lg:grid-cols-7">
+                        <HourlyEfficiencyChart className="lg:col-span-4" />
+                        <BottleneckAnalysis className="lg:col-span-3" />
+                    </div>
                     <div className="grid gap-8 grid-cols-1 lg:grid-cols-2">
                         <ProductionEntry />
                         <AISuggestions />
