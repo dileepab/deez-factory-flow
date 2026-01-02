@@ -32,6 +32,7 @@ export function OperatorDashboard() {
   const monthlyStats = operator?.monthlyStats?.[monthKey];
   const totalEarnedMinutes = monthlyStats?.totalEarnedMinutes || 0;
   const daysWorked = monthlyStats?.daysWorked || 0;
+  const monthlyEquivalentGarments = monthlyStats?.equivalentGarments || 0;
 
   // Calculate absent days using actual working days from config
   const actualWorkingDays = getActualWorkingDays(year, month, config?.holidays || []);
@@ -54,7 +55,7 @@ export function OperatorDashboard() {
   if (!config) {
     return (
       <div className="flex flex-col items-center justify-center h-40 text-center">
-         <Settings2 className="h-10 w-10 text-destructive mb-2" />
+        <Settings2 className="h-10 w-10 text-destructive mb-2" />
         <h3 className="text-lg font-semibold">Configuration Not Found</h3>
         <p className="text-sm text-muted-foreground">
           Please ask an administrator to set up the main configuration file in the database.
@@ -70,14 +71,39 @@ export function OperatorDashboard() {
         description="Here's a summary of your performance today."
       />
       <div className="grid gap-6 md:grid-cols-3 lg:grid-cols-5">
-        <StatCard title="Efficiency" value={`${operator.efficiency || 0}%`} icon={Target} description="Target: 85%" />
-        <StatCard title="Earned Minutes (Today)" value={String(Math.round(operator.earnedMinutes || 0))} icon={BarChart} description={`vs ${config.availableMinutesPerDay} available`} />
-        <StatCard title="Total Operations (Today)" value={`${operator.totalOperations || 0}`} icon={ClipboardList} description="Individual tasks completed" />
-        <StatCard title="Equivalent Garments (Today)" value={`${(operator.equivalentGarments || 0).toFixed(2)}`} icon={Package} description="Full garments worth of work"/>
-        <StatCard title="Rework (Today)" value={`${operator.rework || 0} pcs`} icon={AlertTriangle} />
+        <StatCard
+          title="Efficiency"
+          value={`${operator.efficiency || 0}%`}
+          icon={Target}
+          description={`Month Avg: ${monthlyStats?.monthlyEfficiency || 0}%`}
+        />
+        <StatCard
+          title="Earned Minutes"
+          value={String(Math.round(operator.earnedMinutes || 0))}
+          icon={BarChart}
+          description={`Month Total: ${Math.round(totalEarnedMinutes)}`}
+        />
+        <StatCard
+          title="Equivalent Garments"
+          value={`${(operator.equivalentGarments || 0).toFixed(1)}`}
+          icon={Package}
+          description={`Month Total: ${Math.round(monthlyEquivalentGarments)}`}
+        />
+        <StatCard
+          title="Total Operations"
+          value={`${operator.totalOperations || 0}`}
+          icon={ClipboardList}
+          description="Completed Today"
+        />
+        <StatCard
+          title="Rework Details"
+          value={`${operator.rework || 0} pcs`}
+          icon={AlertTriangle}
+          description="Defects Today"
+        />
       </div>
       <div className="mt-6">
-        <SalarySlip 
+        <SalarySlip
           operator={operator}
           totalEarnedMinutes={totalEarnedMinutes}
           daysAbsent={daysAbsent}

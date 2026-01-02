@@ -41,6 +41,7 @@ export interface User {
             totalEarnedMinutes: number;
             daysWorked: number;
             monthlyEfficiency: number;
+            equivalentGarments?: number;
         }
     }
 }
