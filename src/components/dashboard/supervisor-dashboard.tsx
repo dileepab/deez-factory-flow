@@ -13,6 +13,8 @@ import { useCollection } from '@/firebase/firestore/use-collection';
 import { collection, query, where, orderBy } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
+import { HourlyEfficiencyChart } from '@/components/dashboard/hourly-efficiency-chart';
+import { BottleneckAnalysis } from '@/components/dashboard/bottleneck-analysis';
 import { startOfDay, format } from 'date-fns';
 
 export function SupervisorDashboard() {
@@ -47,7 +49,20 @@ export function SupervisorDashboard() {
 
 
     const stats = useMemo(() => {
-        const todayProduction = productionLogs?.reduce((sum, log) => sum + (log.cumulativeQuantity || 0), 0) || 0;
+        const todayProduction = productionLogs?.reduce((sum, log) => {
+            const style = styles?.find(s => s.id === log.styleId);
+            if (!style) return sum;
+
+            const styleTotalSmv = style.operations.reduce((acc, op) => acc + (Number(op.smv) || 0), 0);
+            if (styleTotalSmv === 0) return sum;
+
+            const operation = style.operations.find(op => op.id === log.operationId);
+            const opSmv = Number(operation?.smv) || 0;
+
+            const equivalent = ((log.cumulativeQuantity || 0) * opSmv) / styleTotalSmv;
+            return sum + equivalent;
+        }, 0) || 0;
+
         const totalOperators = operators?.length || 0;
         const activeStylesCount = styles?.length || 0;
         const avgEfficiency = 82; // Placeholder until factory-wide agg is ready
@@ -65,8 +80,8 @@ export function SupervisorDashboard() {
                         <Activity className="h-4 w-4 text-muted-foreground" />
                     </CardHeader>
                     <CardContent>
-                        <div className="text-2xl font-bold">{stats.todayProduction}</div>
-                        <p className="text-xs text-muted-foreground">Units produced today</p>
+                        <div className="text-2xl font-bold">{stats.todayProduction.toFixed(1)}</div>
+                        <p className="text-xs text-muted-foreground">Equivalent garments</p>
                     </CardContent>
                 </Card>
                 <Card>
@@ -109,6 +124,10 @@ export function SupervisorDashboard() {
                 </TabsList>
 
                 <TabsContent value="overview" className="space-y-4">
+                    <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-7">
+                        <HourlyEfficiencyChart className="col-span-4" />
+                        <BottleneckAnalysis className="col-span-3" />
+                    </div>
                     <div className="grid gap-8 grid-cols-1 lg:grid-cols-2">
                         <ProductionEntry />
                         <AISuggestions />
