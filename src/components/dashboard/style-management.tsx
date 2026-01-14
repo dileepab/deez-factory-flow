@@ -23,6 +23,8 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { StyleProgress } from '@/components/dashboard/style-progress';
+import { Checkbox } from '@/components/ui/checkbox';
+import { ScrollArea } from '@/components/ui/scroll-area';
 
 export function StyleManagement() {
     const { toast } = useToast();
@@ -43,6 +45,7 @@ export function StyleManagement() {
     const [newOperationName, setNewOperationName] = useState("");
     const [newOperationTime, setNewOperationTime] = useState<number>(0);
     const [newMachineType, setNewMachineType] = useState<MachineType[number]>(MACHINE_TYPES[0]);
+    const [newOpDependencies, setNewOpDependencies] = useState<string[]>([]);
 
     const stylesQuery = useMemoFirebase(() => firestore ? query(collection(firestore, 'styles'), where('status', '==', statusFilter)) : null, [statusFilter]);
     const { data: styles, isLoading: areStylesLoading, error: stylesError } = useCollection<GarmentStyle>(stylesQuery);
@@ -98,11 +101,13 @@ export function StyleManagement() {
             setNewOperationName(operation.name || "");
             setNewOperationTime(operation.smv || 0);
             setNewMachineType(operation.machineType || MACHINE_TYPES[0]);
+            setNewOpDependencies(operation.dependencies || []);
         } else {
             setCurrentOperation(null);
             setNewOperationName("");
             setNewOperationTime(0);
             setNewMachineType(MACHINE_TYPES[0]);
+            setNewOpDependencies([]);
         }
         setIsOperationDialogOpen(true);
     };
@@ -128,7 +133,7 @@ export function StyleManagement() {
             if (opIndex > -1) {
                 const oldTimeInMinutes = (newOperations[opIndex].smv || 0) / 60;
                 newTotalSmvInMinutes = newTotalSmvInMinutes - oldTimeInMinutes + operationTimeInMinutes;
-                newOperations[opIndex] = { ...newOperations[opIndex], name: newOperationName, smv: newOperationTime, machineType: newMachineType };
+                newOperations[opIndex] = { ...newOperations[opIndex], name: newOperationName, smv: newOperationTime, machineType: newMachineType, dependencies: newOpDependencies };
             }
         } else { // Adding new operation
             newOperations.push({
@@ -137,7 +142,7 @@ export function StyleManagement() {
                 smv: newOperationTime,
                 completedQuantity: 0,
                 machineType: newMachineType,
-                dependencies: [],
+                dependencies: newOpDependencies,
             });
             newTotalSmvInMinutes += operationTimeInMinutes;
         }
@@ -464,6 +469,43 @@ export function StyleManagement() {
                                         ))}
                                     </SelectContent>
                                 </Select>
+                            </div>
+                            <div className="grid grid-cols-4 items-start gap-4">
+                                <Label className="text-right pt-2">Dependencies</Label>
+                                <div className="col-span-3 border rounded-md p-2">
+                                    <ScrollArea className="h-[150px]">
+                                        {currentStyle?.operations?.length ? (
+                                            <div className="space-y-2">
+                                                {currentStyle.operations
+                                                    .filter(op => op.id !== currentOperation?.id)
+                                                    .map(op => (
+                                                        <div key={op.id} className="flex items-center space-x-2">
+                                                            <Checkbox
+                                                                id={`dep-${op.id}`}
+                                                                checked={newOpDependencies.includes(op.id)}
+                                                                onCheckedChange={(checked) => {
+                                                                    if (checked) {
+                                                                        setNewOpDependencies([...newOpDependencies, op.id]);
+                                                                    } else {
+                                                                        setNewOpDependencies(newOpDependencies.filter(id => id !== op.id));
+                                                                    }
+                                                                }}
+                                                            />
+                                                            <Label htmlFor={`dep-${op.id}`} className="text-sm font-normal cursor-pointer">
+                                                                {op.name}
+                                                            </Label>
+                                                        </div>
+                                                    ))
+                                                }
+                                                {currentStyle.operations.filter(op => op.id !== currentOperation?.id).length === 0 && (
+                                                    <p className="text-sm text-muted-foreground">No other operations available.</p>
+                                                )}
+                                            </div>
+                                        ) : (
+                                            <p className="text-sm text-muted-foreground">No operations created yet.</p>
+                                        )}
+                                    </ScrollArea>
+                                </div>
                             </div>
                         </div>
                         <DialogFooter>

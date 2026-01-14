@@ -17,6 +17,7 @@ export const viewport: Viewport = {
 export const metadata: Metadata = {
   title: "FactoryFlow",
   description: "Hourly production monitoring and reporting for garment factories.",
+  manifest: "/manifest.json",
 };
 
 export default function RootLayout({

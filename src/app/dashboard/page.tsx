@@ -11,6 +11,8 @@ import { firestore } from '@/firebase/client';
 import { Loader } from '@/components/loader';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 
+import { ThemeToggle } from '@/components/theme-toggle';
+
 export default function DashboardPage() {
   const { user, loading: authLoading } = useAuth();
 
@@ -43,15 +45,12 @@ export default function DashboardPage() {
   }
 
   return (
-    <div>
-      {role === 'operator' && (
-        <OperatorDashboard />
-      )}
-
-      {role === 'supervisor' && <SupervisorDashboard />}
-
-      {role === 'admin' && <AdminDashboard />}
-
+    <div className="min-h-screen bg-background relative">
+      <div className="container mx-auto p-4 md:p-8">
+        {role === 'operator' && <OperatorDashboard />}
+        {role === 'supervisor' && <SupervisorDashboard />}
+        {role === 'admin' && <AdminDashboard />}
+      </div>
     </div>
   );
 }

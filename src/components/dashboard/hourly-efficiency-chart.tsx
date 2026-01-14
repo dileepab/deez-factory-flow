@@ -145,30 +145,35 @@ export function HourlyEfficiencyChart({ className }: { className?: string }) {
                 <div className="h-[300px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
                         <LineChart data={chartData}>
-                            <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(var(--muted))" />
                             <XAxis
                                 dataKey="time"
-                                stroke="#888888"
+                                stroke="hsl(var(--muted-foreground))"
                                 fontSize={12}
                                 tickLine={false}
                                 axisLine={false}
                             />
                             <YAxis
-                                stroke="#888888"
+                                stroke="hsl(var(--muted-foreground))"
                                 fontSize={12}
                                 tickLine={false}
                                 axisLine={false}
                                 tickFormatter={(value) => `${value}%`}
                             />
                             <Tooltip
-                                contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                                contentStyle={{
+                                    backgroundColor: 'hsl(var(--popover))',
+                                    border: '1px solid hsl(var(--border))',
+                                    borderRadius: '8px',
+                                    color: 'hsl(var(--popover-foreground))'
+                                }}
                                 formatter={(value: number) => [`${value}%`, "Efficiency"]}
                             />
                             <Legend />
                             <Line
                                 type="monotone"
                                 dataKey="efficiency"
-                                stroke="#2563eb"
+                                stroke="hsl(var(--primary))"
                                 strokeWidth={3}
                                 activeDot={{ r: 8 }}
                                 dot={{ r: 4 }}

@@ -1,0 +1,16 @@
+{
+    "name": "FactoryFlow",
+    "short_name": "FactoryFlow",
+    "description": "Hourly production monitoring and reporting for garment factories.",
+    "start_url": "/",
+    "display": "standalone",
+    "background_color": "#ffffff",
+    "theme_color": "#000000",
+    "icons": [
+        {
+            "src": "/icons/icon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        }
+    ]
+}

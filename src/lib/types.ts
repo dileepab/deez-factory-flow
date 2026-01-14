@@ -36,6 +36,8 @@ export interface User {
     totalOperations?: number; // For operators: Today's total completed operations
     rework?: number; // For operators: Today's rework count
     equivalentGarments?: number; // For operators: Today's equivalent garments produced
+    skills?: MachineType[number][]; // Array of machine types the operator is skilled in
+    efficiencyRating?: number; // Manual rating (default 100)
     monthlyStats?: {
         [key: string]: {
             totalEarnedMinutes: number;
