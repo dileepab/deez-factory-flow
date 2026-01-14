@@ -107,17 +107,23 @@ export function BottleneckAnalysis({ className }: { className?: string }) {
                 <div className="h-[300px] w-full">
                     <ResponsiveContainer width="100%" height="100%">
                         <BarChart layout="vertical" data={data}>
-                            <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                            <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="hsl(var(--muted))" />
                             <XAxis type="number" domain={[0, 100]} hide />
                             <YAxis
                                 dataKey="name"
                                 type="category"
                                 width={150}
+                                stroke="hsl(var(--muted-foreground))"
                                 tick={{ fontSize: 12 }}
                             />
                             <Tooltip
-                                cursor={{ fill: 'transparent' }}
-                                contentStyle={{ borderRadius: '8px' }}
+                                cursor={{ fill: 'hsl(var(--muted))', opacity: 0.1 }}
+                                contentStyle={{
+                                    backgroundColor: 'hsl(var(--popover))',
+                                    border: '1px solid hsl(var(--border))',
+                                    borderRadius: '8px',
+                                    color: 'hsl(var(--popover-foreground))'
+                                }}
                                 formatter={(value: number) => [`${value}%`, "Performance"]}
                             />
                             <Bar dataKey="performance" radius={[0, 4, 4, 0]} barSize={20}>

@@ -55,7 +55,6 @@ const MultiSelect = React.forwardRef<HTMLButtonElement, MultiSelectProps>((
           role="combobox"
           aria-expanded={open}
           className={cn('w-full justify-between', className)}
-          onClick={() => setOpen(!open)}
         >
           <div className="flex flex-wrap items-center gap-1">
             {selected.length > 0 ? (
@@ -82,7 +81,7 @@ const MultiSelect = React.forwardRef<HTMLButtonElement, MultiSelectProps>((
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-full p-0">
+      <PopoverContent className="w-full p-0 z-[200]" avoidPortal={true}>
         <Command>
           <CommandInput placeholder="Search options..." />
           <CommandEmpty>No options found.</CommandEmpty>

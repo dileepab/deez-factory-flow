@@ -3,7 +3,7 @@
 import { useMemo } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ProductionEntry } from '@/components/dashboard/production-entry';
+import { ProductionEntry as ProductionEntryForm } from '@/components/dashboard/production-entry';
 import { AISuggestions } from '@/components/dashboard/ai-suggestions';
 import { ProductionLog } from '@/components/dashboard/production-log';
 import { OperatorLeaderboard } from '@/components/dashboard/leaderboard';
@@ -15,8 +15,11 @@ import { firestore } from '@/firebase/client';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { HourlyEfficiencyChart } from '@/components/dashboard/hourly-efficiency-chart';
 import { BottleneckAnalysis } from '@/components/dashboard/bottleneck-analysis';
+import { ProductionPlanner } from '@/components/dashboard/production-planner';
 import { useConfiguration } from '@/firebase/firestore/use-configuration';
 import { startOfDay, format, startOfMonth } from 'date-fns';
+
+import type { GarmentStyle, ProductionEntry } from '@/lib/types';
 
 export function SupervisorDashboard() {
     const { data: config } = useConfiguration();
@@ -33,7 +36,7 @@ export function SupervisorDashboard() {
         ),
         []
     );
-    const { data: productionLogs } = useCollection(productionQuery);
+    const { data: productionLogs } = useCollection<ProductionEntry>(productionQuery);
 
     // 2. Operators (Active)
     const operatorsQuery = useMemoFirebase(
@@ -47,7 +50,7 @@ export function SupervisorDashboard() {
         () => query(collection(firestore, 'styles'), where('status', '==', 'active')),
         []
     );
-    const { data: styles } = useCollection(stylesQuery);
+    const { data: styles } = useCollection<GarmentStyle>(stylesQuery);
 
 
     const stats = useMemo(() => {
@@ -159,6 +162,7 @@ export function SupervisorDashboard() {
             <Tabs defaultValue="overview" className="space-y-4">
                 <TabsList>
                     <TabsTrigger value="overview">Overview</TabsTrigger>
+                    <TabsTrigger value="planning">Production Planning</TabsTrigger>
                     <TabsTrigger value="styles">Styles & Operations</TabsTrigger>
                     <TabsTrigger value="leaderboard">Team Leaderboard</TabsTrigger>
                 </TabsList>
@@ -169,12 +173,16 @@ export function SupervisorDashboard() {
                         <BottleneckAnalysis className="lg:col-span-3" />
                     </div>
                     <div className="grid gap-8 grid-cols-1 lg:grid-cols-2">
-                        <ProductionEntry />
+                        <ProductionEntryForm />
                         <AISuggestions />
                         <div className="lg:col-span-2">
                             <ProductionLog />
                         </div>
                     </div>
+                </TabsContent>
+
+                <TabsContent value="planning" className="space-y-4">
+                    <ProductionPlanner />
                 </TabsContent>
 
                 <TabsContent value="styles" className="space-y-4">
