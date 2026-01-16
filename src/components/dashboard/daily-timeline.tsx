@@ -1,4 +1,4 @@
-
+import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import type { GarmentStyle, Operator } from '@/lib/types';
@@ -19,6 +19,9 @@ interface DailyTimelineProps {
 }
 
 export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule }: DailyTimelineProps) {
+    // State for Mobile Tooltips
+    const [openTooltipId, setOpenTooltipId] = useState<string | null>(null);
+
     // Colors for operations to distinguish them (Hex for reliability)
     const OP_COLORS = [
         "#3b82f6", // Blue
@@ -255,32 +258,43 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
 
                                         {/* Bar Track - NOW RELATIVE for ABSOLUTE children */}
                                         <div className="w-full md:flex-1 h-[32px] bg-muted/30 rounded-md overflow-hidden relative">
-                                            {segments.map((seg, i) => (
-                                                <Tooltip key={i}>
-                                                    <TooltipTrigger asChild>
-                                                        <div
-                                                            className="absolute top-0 bottom-0 border-r border-white/20 hover:brightness-110 transition-all cursor-pointer box-border flex items-center justify-center text-[10px] text-white font-bold shadow-sm"
-                                                            style={{
-                                                                left: `${(seg.start / TOTAL_SHIFT_MINUTES) * 100}%`,
-                                                                width: `${((seg.end - seg.start) / TOTAL_SHIFT_MINUTES) * 100}%`,
-                                                                backgroundColor: seg.color
-                                                            }}
-                                                        >
-                                                            {/* Only show count if duration > 10m (~2% width) */}
-                                                            {(seg.end - seg.start) > 10 && Math.round(seg.count)}
-                                                        </div>
-                                                    </TooltipTrigger>
-                                                    <TooltipContent className="text-xs !bg-white !text-slate-900 border border-slate-200 shadow-md p-2">
-                                                        <div className="font-bold mb-1">{seg.name}</div>
-                                                        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 opacity-90">
-                                                            <span>Count:</span> <span className="font-mono font-bold">{Math.round(seg.count)}</span>
-                                                            <span>Start:</span> <span className="font-mono">{formatTime(seg.start)}</span>
-                                                            <span>End:</span> <span className="font-mono">{formatTime(seg.end)}</span>
-                                                            <span>Duration:</span> <span className="font-mono">{Math.round(seg.end - seg.start)}m</span>
-                                                        </div>
-                                                    </TooltipContent>
-                                                </Tooltip>
-                                            ))}
+                                            {segments.map((seg, i) => {
+                                                // Unique key for this user row + segment index
+                                                const segmentKey = `${user.id}-${i}`;
+                                                const isOpen = openTooltipId === segmentKey;
+
+                                                return (
+                                                    <Tooltip
+                                                        key={i}
+                                                        open={isOpen}
+                                                        onOpenChange={(open) => setOpenTooltipId(open ? segmentKey : null)}
+                                                    >
+                                                        <TooltipTrigger asChild>
+                                                            <div
+                                                                onClick={() => setOpenTooltipId(isOpen ? null : segmentKey)}
+                                                                className="absolute top-0 bottom-0 border-r border-white/20 hover:brightness-110 transition-all cursor-pointer box-border flex items-center justify-center text-[10px] text-white font-bold shadow-sm"
+                                                                style={{
+                                                                    left: `${(seg.start / TOTAL_SHIFT_MINUTES) * 100}%`,
+                                                                    width: `${((seg.end - seg.start) / TOTAL_SHIFT_MINUTES) * 100}%`,
+                                                                    backgroundColor: seg.color
+                                                                }}
+                                                            >
+                                                                {/* Only show count if duration > 10m (~2% width) */}
+                                                                {(seg.end - seg.start) > 10 && Math.round(seg.count)}
+                                                            </div>
+                                                        </TooltipTrigger>
+                                                        <TooltipContent className="text-xs !bg-white !text-slate-900 border border-slate-200 shadow-md p-2 z-50">
+                                                            <div className="font-bold mb-1">{seg.name}</div>
+                                                            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 opacity-90">
+                                                                <span>Count:</span> <span className="font-mono font-bold">{Math.round(seg.count)}</span>
+                                                                <span>Start:</span> <span className="font-mono">{formatTime(seg.start)}</span>
+                                                                <span>End:</span> <span className="font-mono">{formatTime(seg.end)}</span>
+                                                                <span>Duration:</span> <span className="font-mono">{Math.round(seg.end - seg.start)}m</span>
+                                                            </div>
+                                                        </TooltipContent>
+                                                    </Tooltip>
+                                                );
+                                            })}
                                         </div>
                                     </div>
                                 );

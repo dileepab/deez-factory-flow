@@ -160,12 +160,14 @@ export function SupervisorDashboard() {
             </div>
 
             <Tabs defaultValue="overview" className="space-y-4">
-                <TabsList>
-                    <TabsTrigger value="overview">Overview</TabsTrigger>
-                    <TabsTrigger value="planning">Production Planning</TabsTrigger>
-                    <TabsTrigger value="styles">Styles & Operations</TabsTrigger>
-                    <TabsTrigger value="leaderboard">Team Leaderboard</TabsTrigger>
-                </TabsList>
+                <div className="w-full overflow-x-auto pb-2">
+                    <TabsList>
+                        <TabsTrigger value="overview">Overview</TabsTrigger>
+                        <TabsTrigger value="planning">Production Planning</TabsTrigger>
+                        <TabsTrigger value="styles">Styles & Operations</TabsTrigger>
+                        <TabsTrigger value="leaderboard">Team Leaderboard</TabsTrigger>
+                    </TabsList>
+                </div>
 
                 <TabsContent value="overview" className="space-y-4">
                     <div className="grid gap-4 grid-cols-1 lg:grid-cols-7">
