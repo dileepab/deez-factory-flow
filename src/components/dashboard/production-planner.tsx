@@ -55,17 +55,19 @@ export const simulateProductionSchedule = (
     operators: Operator[],
     machineCounts: Record<string, number>,
     availableMinutes: number,
-    nextStyle?: GarmentStyle, // NEW: Optional Next Style
-    nextAssignments?: Assignment[] // NEW: Assignments for Next Style
+    switchDelay: number = 5,
+    nextStyle?: GarmentStyle,
+    nextAssignments?: Assignment[]
 ) => {
     // 1. Setup Logging & Output
     const logs: string[] = [];
     const log = (msg: string) => { if (logs.length < 500) logs.push(msg); };
-    log(`SIM START. Machines=${JSON.stringify(machineCounts)}`);
+    log(`SIM START. Machines=${JSON.stringify(machineCounts)}. Delay=${switchDelay}`);
+
+    // Track Last Machine for Delay Logic
+    const operatorLastMachine = new Map<string, string>();
 
     // 1.1 Redundant Dependency Removal (Transitive Reduction)
-    // If T4 depends on T2 and T1, but T2 depends on T1... T4 shouldn't consume T1 again.
-    // We assume dependencies imply flow/consumption.
     const effectiveDependencies = new Map<string, string[]>();
 
     // Helper to get all ancestors
@@ -94,7 +96,6 @@ export const simulateProductionSchedule = (
         const toRemove = new Set<string>();
 
         originalDeps.forEach(dep => {
-            // If this dependency is an ancestor of ANY OTHER dependency, it's redundant.
             originalDeps.forEach(other => {
                 if (dep === other) return;
                 const otherAncestors = getAncestors(other, ancestorsMap);
@@ -111,28 +112,24 @@ export const simulateProductionSchedule = (
     operators.forEach(o => schedule[o.id] = []);
 
     // 1.2 Calculate Ideal Weights (Target Ratios)
-    // We run the fluid solver once to know "How much should each person do of each task?"
     const assignArr = assignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
     const solvedWeights = solveFluidCapacity(style, assignArr, operators, machineCounts, availableMinutes);
 
-    // Map<UserId, Map<OpId, TargetRatio>>
     const targetRatios = new Map<string, Map<string, number>>();
     operators.forEach(u => targetRatios.set(u.id, new Map()));
 
     solvedWeights.forEach((res, opId) => {
         if (res.finalWeights) {
             res.finalWeights.forEach((w, uid) => {
-                const userMap = targetRatios.get(uid)!;
-                userMap.set(opId, w);
+                targetRatios.get(uid)?.set(opId, w);
             });
         }
     });
 
-    // Track detailed production for ratio balancing
-    const userProcessedCounts = new Map<string, Map<string, number>>(); // UserId -> OpId -> Pcs
+    const userProcessedCounts = new Map<string, Map<string, number>>();
     operators.forEach(u => userProcessedCounts.set(u.id, new Map()));
 
-    // 1.5 Pre-calculate Successors (Upstreams) for quick lookup
+    // 1.5 Pre-calculate Successors
     const successors = new Map<string, string[]>();
     style.operations.forEach(op => {
         if (op.dependencies) {
@@ -145,52 +142,30 @@ export const simulateProductionSchedule = (
     });
 
     // 2. Initialize World State & Targets
-    const inventory = new Map<string, number>(); // OpId -> Quantity Available as Input
-    const remainingTargets = new Map<string, number>(); // OpId -> How many left to make?
-    const totalOrderQty = style.quantity || 10000; // Default to big number if 0
+    const inventory = new Map<string, number>();
+    const remainingTargets = new Map<string, number>();
+    const totalOrderQty = style.quantity || 10000;
 
-    // A. Calculate Remaining Targets
     style.operations.forEach(op => {
         const done = op.completedQuantity || 0;
         const left = Math.max(0, totalOrderQty - done);
         remainingTargets.set(op.id, left);
     });
 
-    // B. Calculate Initial Inventory (WIP) from Previous Days
-    // Inventory = MyCompleted - Sum(ConsumersCompleted)
+    // B. Calculate Initial Inventory (WIP)
     style.operations.forEach(op => {
-        // 1. Root Check (Input Inventory)
-        const deps = effectiveDependencies.get(op.id) || [];
-
-        // 2. Output Inventory Calculation
-        // How many of MY output are sitting waiting for the next guy?
-        // = MyTotalCompleted - Sum(MyDirectConsumersTotalCompleted)
         let myOutputBuffer = op.completedQuantity || 0;
-
-        // Find direct consumers
         const consumers = style.operations.filter(c => {
-            const cDeps = effectiveDependencies.get(c.id) || [];
-            return cDeps.includes(op.id);
+            const deps = effectiveDependencies.get(c.id) || [];
+            return deps.includes(op.id);
         });
-
-        // Deduct consumed
         consumers.forEach(c => {
             myOutputBuffer -= (c.completedQuantity || 0);
         });
-
-        // Safety Clamp
         inventory.set(op.id, Math.max(0, myOutputBuffer));
     });
 
-    // Fix Roots: Roots behave like they have infinite INPUT, but we still track their OUTPUT inventory above.
-    // The previous loop only set OUTPUT inventory.
-    // We don't need to manually set "Input" inventory for roots, because 'effectiveDependencies' for roots is empty,
-    // so the 'Check Input' logic naturally returns Infinity maxInput.
-    // BUT we must ensure we don't overwrite the calculated inventory with 0 or Infinity inadvertently.
-
-    // (Previous logic removed: "style.operations.forEach... inventory.set(0)") 
-
-    // 2.5 Initialize Next Style State (If exists)
+    // 2.5 Initialize Next Style State
     const nextInventory = new Map<string, number>();
     const nextRemainingTargets = new Map<string, number>();
     const nextSuccessors = new Map<string, string[]>();
@@ -199,7 +174,6 @@ export const simulateProductionSchedule = (
     const nextUserProcessedCounts = new Map<string, Map<string, number>>();
 
     if (nextStyle && nextAssignments) {
-        // A. Effective Deps
         const getNextAncestors = (opId: string, memo = new Map<string, Set<string>>()): Set<string> => {
             if (memo.has(opId)) return memo.get(opId)!;
             const ancestors = new Set<string>();
@@ -231,7 +205,6 @@ export const simulateProductionSchedule = (
             nextEffectiveDependencies.set(op.id, originalDeps.filter(d => !toRemove.has(d)));
         });
 
-        // B. Successors
         nextStyle.operations.forEach(op => {
             if (op.dependencies) {
                 op.dependencies.forEach(depId => {
@@ -242,11 +215,10 @@ export const simulateProductionSchedule = (
             }
         });
 
-        // C. Target Ratios
-        const assignArr = nextAssignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
-        const solvedWeights = solveFluidCapacity(nextStyle, assignArr, operators, machineCounts, availableMinutes);
+        const nextAssignArr = nextAssignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
+        const nextSolvedWeights = solveFluidCapacity(nextStyle, nextAssignArr, operators, machineCounts, availableMinutes);
         operators.forEach(u => nextTargetRatios.set(u.id, new Map()));
-        solvedWeights.forEach((res, opId) => {
+        nextSolvedWeights.forEach((res, opId) => {
             if (res.finalWeights) {
                 res.finalWeights.forEach((w, uid) => {
                     nextTargetRatios.get(uid)?.set(opId, w);
@@ -255,32 +227,29 @@ export const simulateProductionSchedule = (
         });
         operators.forEach(u => nextUserProcessedCounts.set(u.id, new Map()));
 
-        // D. Targets & Inventory
         const nextOrderQty = nextStyle.quantity || 10000;
         nextStyle.operations.forEach(op => {
-            // Targets
             const done = op.completedQuantity || 0;
             const left = Math.max(0, nextOrderQty - done);
             nextRemainingTargets.set(op.id, left);
 
-            // Inventory (WIP)
             let myOutput = op.completedQuantity || 0;
             const consumers = nextStyle.operations.filter(c => {
-                const cDeps = nextEffectiveDependencies.get(c.id) || [];
-                return cDeps.includes(op.id);
+                const deps = nextEffectiveDependencies.get(c.id) || [];
+                return deps.includes(op.id);
             });
             consumers.forEach(c => myOutput -= (c.completedQuantity || 0));
             nextInventory.set(op.id, Math.max(0, myOutput));
         });
     }
 
-    const machineUsage = new Map<string, number>(); // MachineType (Trimmed) -> Count
+    const machineUsage = new Map<string, number>();
     const opState = new Map<string, { busyUntil: number, opId: string, startTick: number, count: number, isNextStyle?: boolean }>();
 
-    // 3. Simulation Loop (Minute by Minute)
+    // 3. Simulation Loop
     for (let t = 0; t < availableMinutes; t++) {
 
-        // A. Release Resources (Operators finishing at time <= t)
+        // A. Release Resources
         const finishedIds: string[] = [];
         opState.forEach((state, uid) => {
             if (state.busyUntil <= t) {
@@ -294,7 +263,6 @@ export const simulateProductionSchedule = (
             const currentStyle = isNext ? nextStyle! : style;
             const op = currentStyle.operations.find(o => o.id === state.opId);
 
-            // Record to Schedule
             schedule[uid].push({
                 start: state.startTick,
                 end: state.busyUntil,
@@ -302,38 +270,35 @@ export const simulateProductionSchedule = (
                 count: state.count
             });
 
-            // Release Machine
             if (op) {
+                // Update Last Machine Type Logic
+                operatorLastMachine.set(uid, op.machineType.trim());
+
                 const mType = op.machineType.trim();
                 const currentUse = machineUsage.get(mType) || 1;
                 machineUsage.set(mType, Math.max(0, currentUse - 1));
 
-                // Add Output to Inventory
                 const targetInventory = isNext ? nextInventory : inventory;
                 const currentInv = targetInventory.get(op.id) || 0;
                 targetInventory.set(op.id, currentInv + state.count);
 
-                // Track User Production for Ratio Compliance
                 const targetUserCounts = isNext ? nextUserProcessedCounts : userProcessedCounts;
                 const uMap = targetUserCounts.get(uid);
-                if (uMap) {
-                    uMap.set(op.id, (uMap.get(op.id) || 0) + state.count);
-                }
+                if (uMap) uMap.set(op.id, (uMap.get(op.id) || 0) + state.count);
 
-                // Decrement Remaining Target
                 const targetRemaining = isNext ? nextRemainingTargets : remainingTargets;
                 const left = targetRemaining.get(op.id) || 0;
                 targetRemaining.set(op.id, Math.max(0, left - state.count));
 
                 const styleLabel = isNext ? "(NEXT)" : "";
-                log(`T=${t.toFixed(0)} RELEASE ${uid} ${mType}. Output ${op.name} ${styleLabel}: +${state.count} (Total: ${currentInv + state.count})`);
+                log(`T=${t.toFixed(0)} RELEASE ${uid} ${mType}. Output ${op.name} ${styleLabel}: +${state.count}`);
             }
             opState.delete(uid);
         });
 
         // B. Assign Idle Operators
         operators.forEach(user => {
-            if (opState.has(user.id)) return; // Busy
+            if (opState.has(user.id)) return;
 
             const tryAssign = (
                 currentStyle: GarmentStyle,
@@ -353,20 +318,15 @@ export const simulateProductionSchedule = (
                     .map(a => currentStyle.operations.find(o => o.id === a.operationId))
                     .filter(Boolean) as typeof currentStyle.operations;
 
-                // INTELLIGENT SORTING
                 candidates.sort((a, b) => {
                     const getInventoryScore = (op: typeof style.operations[0]) => {
                         const currentInv = currentInventory.get(op.id) || 0;
                         const succs = currentSuccessors.get(op.id) || [];
                         const isFinal = !currentSuccessors.has(op.id) || currentSuccessors.get(op.id)!.length === 0;
 
-                        // Backpressure: If downstream is piled up (>15), deprioritize
                         const successorBlocked = succs.some(sId => (currentInventory.get(sId) || 0) > 15);
                         if (successorBlocked) return 2;
-
-                        // Feed Starved: If my buffer is low (<15), prioritize
                         if (!isFinal && currentInv < 15) return 0;
-
                         return 1;
                     };
 
@@ -374,17 +334,14 @@ export const simulateProductionSchedule = (
                     const bInv = getInventoryScore(b);
                     if (aInv !== bInv) return aInv - bInv;
 
-                    // Ratio Compliance
                     const getComplianceScore = (op: typeof style.operations[0]) => {
                         const target = currentTargetRatios.get(user.id)?.get(op.id) || 0;
                         if (target <= 0.01) return 1000;
-
                         const processedMap = currentUserProcessedCounts.get(user.id);
                         const currentPcs = processedMap?.get(op.id) || 0;
                         const smv = op.smv / 60;
                         const eff = (user.efficiencyRating || 100) / 100;
                         const minsSpent = (currentPcs * smv) / eff;
-
                         let totalMins = 0;
                         if (processedMap) {
                             processedMap.forEach((cnt, oid) => {
@@ -392,7 +349,6 @@ export const simulateProductionSchedule = (
                                 if (obj) totalMins += (cnt * (obj.smv / 60)) / eff;
                             });
                         }
-
                         const currentShare = totalMins > 0 ? minsSpent / totalMins : 0;
                         return currentShare / target;
                     };
@@ -400,40 +356,30 @@ export const simulateProductionSchedule = (
                     const aRatio = getComplianceScore(a);
                     const bRatio = getComplianceScore(b);
                     if (Math.abs(aRatio - bRatio) > 0.1) return aRatio - bRatio;
-
                     return currentStyle.operations.indexOf(a) - currentStyle.operations.indexOf(b);
                 });
 
-                // Attempt to start
                 for (const op of candidates) {
-                    // Check Machine
                     const mType = op.machineType.trim();
                     const mUsed = machineUsage.get(mType) || 0;
                     const mTotal = machineCounts[mType] || 1;
                     if (mUsed >= mTotal) continue;
 
-                    // Check Input
                     let maxInput = Infinity;
                     const deps = currentEffectiveDependencies.get(op.id) || [];
                     if (deps.length > 0) {
                         const inputs = deps.map(d => currentInventory.get(d) || 0);
                         maxInput = Math.min(...inputs);
                     }
-
-                    // Check Target Cap
                     const leftToMake = currentRemainingTargets.get(op.id) || 0;
                     if (leftToMake <= 0) continue;
                     if (maxInput > leftToMake) maxInput = leftToMake;
-
-                    // Zero Check
                     if (maxInput <= 0 && deps.length > 0) continue;
 
-                    // Batch Sizing inside Loop
                     const MIN_BATCH = 10;
                     const isEndOfShift = (availableMinutes - t) < 60;
                     if (maxInput < MIN_BATCH && !isEndOfShift && deps.length) continue;
 
-                    // Start!
                     const efficiency = (user.efficiencyRating || 100) / 100;
                     const smvMinutes = op.smv / 60;
                     const minutesPerPc = smvMinutes / efficiency;
@@ -441,20 +387,26 @@ export const simulateProductionSchedule = (
                     const rawTarget = Math.floor(20 / minutesPerPc);
                     const targetPcs = Math.max(10, Math.min(100, rawTarget));
                     const actualPcs = Math.min(maxInput, targetPcs);
-                    const duration = actualPcs * minutesPerPc;
+
+                    // NEW: Determine Switch Delay
+                    const lastType = operatorLastMachine.get(user.id);
+                    let delay = 0;
+                    if (lastType && lastType !== mType) {
+                        delay = switchDelay;
+                    }
+
+                    const duration = (actualPcs * minutesPerPc) + delay;
 
                     opState.set(user.id, {
                         busyUntil: t + duration,
                         opId: op.id,
-                        startTick: t,
+                        startTick: t + delay,
                         count: actualPcs,
                         isNextStyle: isNext
                     });
 
-                    // Claim Machine
                     machineUsage.set(mType, mUsed + 1);
 
-                    // Consume Input (Instant reservation)
                     if (deps.length > 0) {
                         deps.forEach(d => {
                             const cur = currentInventory.get(d) || 0;
@@ -463,18 +415,17 @@ export const simulateProductionSchedule = (
                     }
 
                     const styleLabel = isNext ? "(NEXT)" : "";
-                    log(`T=${t.toFixed(0)} CLAIM ${user.name} ${mType}. Task: ${op.name} ${styleLabel}. Batch: ${actualPcs}.`);
+                    const delayMsg = delay > 0 ? `(Delay ${delay}m)` : "";
+                    log(`T=${t.toFixed(0)} CLAIM ${user.name} ${mType}. Task: ${op.name} ${styleLabel}. Batch: ${actualPcs}. ${delayMsg}`);
                     return true;
                 }
                 return false;
             };
 
-            // 1. Try Primary Style
             if (!tryAssign(
                 style, assignments, inventory, remainingTargets, successors,
                 effectiveDependencies, targetRatios, userProcessedCounts, false
             )) {
-                // 2. Try Next Style (if available)
                 if (nextStyle && nextAssignments) {
                     tryAssign(
                         nextStyle, nextAssignments, nextInventory, nextRemainingTargets, nextSuccessors,
@@ -624,6 +575,7 @@ export function ProductionPlanner(): React.ReactNode {
     const [selectedStyleId, setSelectedStyleId] = useState<string>("");
     const [selectedNextStyleId, setSelectedNextStyleId] = useState<string>(""); // NEW: Next Style
     const [dailyTarget, setDailyTarget] = useState<number>(500);
+    const [switchDelay, setSwitchDelay] = useState<number>(5); // Configurable Switch Delay (mins)
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
@@ -1236,8 +1188,8 @@ export function ProductionPlanner(): React.ReactNode {
     // Simulate Schedule for Visualization
     const simResult = useMemo(() => {
         if (!selectedStyle || assignments.length === 0) return { schedule: {}, logs: [] };
-        return simulateProductionSchedule(selectedStyle, assignments, operators, machineCounts, availableMinutes, selectedNextStyle, nextAssignments);
-    }, [selectedStyle, assignments, operators, machineCounts, availableMinutes, selectedNextStyle, nextAssignments]);
+        return simulateProductionSchedule(selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments);
+    }, [selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments]);
 
     // Global bottleneck: "Actual Output" derived from Simulation (Final Good Count)
     const bottleneckOutput = useMemo(() => {
@@ -1419,8 +1371,8 @@ export function ProductionPlanner(): React.ReactNode {
                 <CardTitle>Production Planner</CardTitle>
                 <CardDescription>Plan daily targets and balance the production line.</CardDescription>
             </CardHeader>
-            <CardContent>
-                <div className="flex flex-col gap-6 mb-6">
+            <CardContent className=' p-2 md:p-6'>
+                <div className="flex flex-col gap-6 mb-6 p-2 md:p-0">
                     <div className="flex flex-col md:flex-row gap-4 items-end">
                         <div className="w-full md:w-1/3 space-y-2">
                             <label className="text-sm font-medium">Select Style</label>
@@ -1488,6 +1440,16 @@ export function ProductionPlanner(): React.ReactNode {
                                     onChange={(e) => setDailyTarget(Number(e.target.value))}
                                 />
                             )}
+                        </div>
+
+                        <div className="w-full md:w-1/6 space-y-2">
+                            <label className="text-sm font-medium">Switch Delay (min)</label>
+                            <Input
+                                type="number"
+                                value={switchDelay}
+                                onChange={(e) => setSwitchDelay(Number(e.target.value))}
+                                min={0}
+                            />
                         </div>
                     </div>
 

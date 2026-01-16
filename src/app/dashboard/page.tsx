@@ -46,7 +46,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-background relative">
-      <div className="container mx-auto p-4 md:p-8">
+      <div className="container mx-auto px-2 py-4 md:p-8">
         {role === 'operator' && <OperatorDashboard />}
         {role === 'supervisor' && <SupervisorDashboard />}
         {role === 'admin' && <AdminDashboard />}

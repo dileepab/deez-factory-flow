@@ -16,7 +16,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       </Sidebar>
       <SidebarInset className="w-full overflow-x-hidden">
         <Header />
-        <main className="flex-1 p-4 md:p-8 w-full max-w-[100vw] overflow-x-hidden">
+        <main className="flex-1 p-2 md:p-8 w-full max-w-[100vw] overflow-x-hidden">
           {children}
         </main>
       </SidebarInset>
