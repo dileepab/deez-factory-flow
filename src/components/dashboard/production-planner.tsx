@@ -575,7 +575,7 @@ export function ProductionPlanner(): React.ReactNode {
     const [selectedStyleId, setSelectedStyleId] = useState<string>("");
     const [selectedNextStyleId, setSelectedNextStyleId] = useState<string>(""); // NEW: Next Style
     const [dailyTarget, setDailyTarget] = useState<number>(500);
-    const [switchDelay, setSwitchDelay] = useState<number>(5); // Configurable Switch Delay (mins)
+    const [switchDelay, setSwitchDelay] = useState<number>(2); // Configurable Switch Delay (mins)
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
