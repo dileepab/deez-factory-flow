@@ -106,3 +106,8 @@ export interface ProductionEntry {
     hourlyRange: string;
     timestamp: FirestoreTimestamp;
 }
+
+export interface Assignment {
+    operationId: string;
+    operatorIds: string[];
+}
