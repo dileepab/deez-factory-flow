@@ -16,12 +16,10 @@ import { collection, query, where, orderBy, limit } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { ResponsiveContainer, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { useConfiguration } from '@/firebase/firestore/use-configuration';
-import { startOfDay, subDays, format, startOfMonth } from 'date-fns';
+import { startOfDay, subDays, format } from 'date-fns';
 import type { GarmentStyle } from '@/lib/types';
 
 export function AdminDashboard() {
-    const { data: config } = useConfiguration();
     // --- Data Fetching ---
 
     // 1. Operators (for total count)
@@ -38,12 +36,12 @@ export function AdminDashboard() {
     );
     const { data: styles } = useCollection<GarmentStyle>(stylesQuery);
 
-    // 3. Production Data (This Month)
-    const monthStart = startOfMonth(new Date());
+    // 3. Production Data (Last 7 Days - For Chart Only)
+    const chartStart = subDays(new Date(), 7);
     const productionQuery = useMemoFirebase(
         () => query(
             collection(firestore, 'production'),
-            where('timestamp', '>=', monthStart),
+            where('timestamp', '>=', chartStart),
             orderBy('timestamp', 'asc')
         ),
         []
@@ -56,63 +54,43 @@ export function AdminDashboard() {
     const stats = useMemo(() => {
         const totalOperators = operators?.length || 0;
         const activeStylesCount = styles?.length || 0;
-        const availableMinutes = config?.availableMinutesPerDay || 480;
 
+        // Use Pre-Calculated Stats from User Profile
         let todayProd = 0;
         let monthProd = 0;
-        let todayEarned = 0;
-        let monthEarned = 0;
+        let todayEfficiencySum = 0;
+        let monthEfficiencySum = 0;
+        let monthEfficiencyCount = 0;
 
-        const todayStr = format(new Date(), 'yyyy-MM-dd');
-        const uniqueDays = new Set<string>();
+        const currentMonthKey = format(new Date(), 'yyyy-MM');
 
-        productionLogs?.forEach(log => {
-            const logDateStr = format(log.timestamp.toDate(), 'yyyy-MM-dd');
-            uniqueDays.add(logDateStr);
-            const isToday = logDateStr === todayStr;
+        operators?.forEach(op => {
+            // Today
+            todayProd += (op.equivalentGarments || 0);
+            todayEfficiencySum += (op.efficiency || 0);
 
-            const style = styles?.find(s => s.id === log.styleId);
-            if (!style) return;
-
-            // Equivalent Garments
-            const styleTotalSmv = style.operations.reduce((acc, op) => acc + (Number(op.smv) || 0), 0);
-            const operation = style.operations.find(op => op.id === log.operationId);
-            const opSmvSeconds = Number(operation?.smv) || 0;
-            const opSmvMinutes = opSmvSeconds / 60;
-
-            // Prod
-            if (styleTotalSmv > 0) {
-                const eq = ((log.cumulativeQuantity || 0) * opSmvSeconds) / styleTotalSmv;
-                monthProd += eq;
-                if (isToday) todayProd += eq;
+            // Month
+            const mStats = op.monthlyStats?.[currentMonthKey];
+            if (mStats) {
+                monthProd += (mStats.equivalentGarments || 0);
+                monthEfficiencySum += (mStats.monthlyEfficiency || 0);
+                monthEfficiencyCount++;
             }
-
-            // Earned Minutes (for Efficiency)
-            const earned = (log.cumulativeQuantity || 0) * opSmvMinutes;
-            monthEarned += earned;
-            if (isToday) todayEarned += earned;
         });
 
-        // Efficiency Calculations
-        // Denominator: ActiveOperators * AvailableMinutes
-        // Note: Ideally we use 'Attendance' but 'All Operators' is a safe baseline for 'Factory Capacity'.
-        const dailyCapacity = totalOperators * availableMinutes;
-
-        const todayEfficiency = dailyCapacity > 0 ? (todayEarned / dailyCapacity) * 100 : 0;
-
-        const workedDays = uniqueDays.size || 1;
-        const monthCapacity = dailyCapacity * workedDays;
-        const monthEfficiency = monthCapacity > 0 ? (monthEarned / monthCapacity) * 100 : 0;
+        // Averages
+        const todayEfficiency = totalOperators > 0 ? todayEfficiencySum / totalOperators : 0;
+        const monthEfficiency = monthEfficiencyCount > 0 ? monthEfficiencySum / monthEfficiencyCount : 0;
 
         return {
             totalOperators,
             activeStylesCount,
             todayProduction: todayProd,
             monthProduction: monthProd,
-            todayEfficiency, // Raw %
+            todayEfficiency,
             monthEfficiency
         };
-    }, [operators, styles, productionLogs, config]);
+    }, [operators, styles]);
 
 
     const chartData = useMemo(() => {
@@ -129,6 +107,7 @@ export function AdminDashboard() {
         // Fill with actual data
         productionLogs.forEach(log => {
             const date = format(log.timestamp.toDate(), 'MMM dd');
+            // Ensure we only chart days within our Map (optimization safety)
             if (dataMap.has(date)) {
                 // Calculate Earned Minutes (Efficiency Count)
                 const style = styles.find(s => s.id === log.styleId);
