@@ -10,8 +10,10 @@ import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { SalarySlip } from "@/components/dashboard/salary-slip";
 import { Target, BarChart, Package, AlertTriangle, Loader2, ClipboardList, Settings2 } from "lucide-react";
-import type { Operator } from "@/lib/types";
+import type { Operator, DailyPlan, GarmentStyle } from "@/lib/types";
 import { getActualWorkingDays } from "@/lib/utils";
+import { DailyTimeline } from "./daily-timeline";
+import { format } from "date-fns";
 
 export function OperatorDashboard() {
   const { user, loading: isUserLoading } = useAuth();
@@ -37,6 +39,21 @@ export function OperatorDashboard() {
   // Calculate absent days using actual working days from config
   const actualWorkingDays = getActualWorkingDays(year, month, config?.holidays || []);
   const daysAbsent = Math.max(0, actualWorkingDays - daysWorked);
+
+  // --- Daily Schedule (New Feature) ---
+  const todayStr = format(new Date(), 'yyyy-MM-dd');
+  const planRef = useMemoFirebase(() => user ? doc(firestore, 'daily_plans', todayStr) : null, [user, todayStr]);
+  const { data: dailyPlan } = useDoc<DailyPlan>(planRef);
+
+  // Fetch Styles needed for the timeline
+  const styleRef = useMemoFirebase(() => dailyPlan?.styleId ? doc(firestore, 'styles', dailyPlan.styleId) : null, [dailyPlan?.styleId]);
+  const { data: selectedStyle } = useDoc<GarmentStyle>(styleRef);
+
+  const nextStyleRef = useMemoFirebase(() => dailyPlan?.nextStyleId ? doc(firestore, 'styles', dailyPlan.nextStyleId) : null, [dailyPlan?.nextStyleId]);
+  const { data: selectedNextStyle } = useDoc<GarmentStyle>(nextStyleRef);
+
+  const mySchedule = dailyPlan?.schedules?.[user?.uid || ''];
+  const hasSchedule = !!mySchedule;
 
   const isLoading = isUserLoading || isOperatorLoading || isConfigLoading;
 
@@ -102,6 +119,27 @@ export function OperatorDashboard() {
           description="Defects Today"
         />
       </div>
+
+      {hasSchedule && selectedStyle && operator && (
+        <div className="mt-8">
+          <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+            Today's Schedule
+            <div className="text-xs font-normal px-2 py-0.5 bg-green-100 text-green-800 rounded-full border border-green-200">
+              Live Plan
+            </div>
+          </h3>
+          <DailyTimeline
+            assignedOperators={[operator]}
+            assignments={dailyPlan!.assignments}
+            selectedStyle={selectedStyle}
+            selectedNextStyle={selectedNextStyle || undefined}
+            flowMetrics={{}}
+            availableMinutes={config?.availableMinutesPerDay || 480}
+            schedule={{ [operator.id]: mySchedule }}
+          />
+        </div>
+      )}
+
       <div className="mt-6">
         <SalarySlip
           operator={operator}

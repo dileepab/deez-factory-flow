@@ -39,15 +39,24 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { MultiSelect, Option } from '@/components/ui/multi-select';
 import { DailyTimeline } from './daily-timeline';
 import { simulateProductionSchedule, solveFluidCapacity, unique } from '@/lib/simulation-engine';
+import { useAuth } from "@/auth-provider";
+import { useToast } from "@/hooks/use-toast";
+import { doc, setDoc, Timestamp } from "firebase/firestore";
+import type { DailyPlan, ScheduleSegment } from "@/lib/types";
+import { format } from "date-fns";
+import { Save, CalendarClock } from "lucide-react";
 
 
 
 export function ProductionPlanner(): React.ReactNode {
+    const { user } = useAuth();
+    const { toast } = useToast();
     const { data: config } = useConfiguration();
     const [selectedStyleId, setSelectedStyleId] = useState<string>("");
     const [selectedNextStyleId, setSelectedNextStyleId] = useState<string>(""); // NEW: Next Style
     const [dailyTarget, setDailyTarget] = useState<number>(500);
     const [switchDelay, setSwitchDelay] = useState<number>(2); // Configurable Switch Delay (mins)
+    const [isPublishing, setIsPublishing] = useState(false);
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
@@ -595,6 +604,41 @@ export function ProductionPlanner(): React.ReactNode {
         const assignment = targetList.find(a => a.operationId === opId);
         if (!assignment) return [];
         return assignment.operatorIds.map(id => operators.find(o => o.id === id)).filter(Boolean) as Operator[];
+    };
+
+    const handlePublishSchedule = async () => {
+        if (!simResult || !simResult.schedule) return;
+        setIsPublishing(true);
+        try {
+            const todayStr = format(new Date(), 'yyyy-MM-dd');
+            const planRef = doc(firestore, 'daily_plans', todayStr);
+
+            const planData: DailyPlan = {
+                date: Timestamp.now(),
+                publishedBy: user?.uid || 'unknown',
+                publishedAt: Timestamp.now(),
+                styleId: selectedStyleId,
+                nextStyleId: selectedNextStyleId || undefined,
+                assignments: [...assignments, ...nextAssignments],
+                schedules: simResult.schedule as unknown as Record<string, ScheduleSegment[]>
+            };
+
+            await setDoc(planRef, planData);
+
+            toast({
+                title: "Schedule Published",
+                description: `Production plan for ${todayStr} has been published to all operators.`,
+            });
+        } catch (error) {
+            console.error("Error publishing schedule:", error);
+            toast({
+                title: "Error",
+                description: "Failed to publish schedule. Please try again.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsPublishing(false);
+        }
     };
 
     // Calculate Flow Metrics (Local + Upstream Constraints)
@@ -1194,6 +1238,22 @@ export function ProductionPlanner(): React.ReactNode {
 
                 {/* Visual Timeline */}
                 {/* Visual Timeline */}
+                {selectedStyle && (assignments.length > 0 || nextAssignments.length > 0) && (
+                    <div className="flex items-center justify-between mb-4 mt-8">
+                        <h3 className="text-lg font-semibold flex items-center gap-2">
+                            <CalendarClock className="h-5 w-5" />
+                            Visual Timeline
+                        </h3>
+                        <Button
+                            onClick={handlePublishSchedule}
+                            disabled={isPublishing || !simResult.schedule}
+                            className="bg-green-600 hover:bg-green-700 text-white"
+                        >
+                            {isPublishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                            Publish Plan
+                        </Button>
+                    </div>
+                )}
                 {selectedStyle && (assignments.length > 0 || nextAssignments.length > 0) && (
                     <DailyTimeline
                         assignedOperators={
