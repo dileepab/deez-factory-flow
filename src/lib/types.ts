@@ -111,3 +111,20 @@ export interface Assignment {
     operationId: string;
     operatorIds: string[];
 }
+
+export interface ScheduleSegment {
+    start: number;
+    end: number;
+    opId: string;
+    count: number;
+}
+
+export interface DailyPlan {
+    date: FirestoreTimestamp;
+    publishedBy: string;
+    publishedAt: FirestoreTimestamp;
+    styleId: string; // ID of the primary style
+    nextStyleId?: string; // ID of the next style (if any)
+    assignments: Assignment[];
+    schedules: Record<string, ScheduleSegment[]>; // Key is operatorId
+}
