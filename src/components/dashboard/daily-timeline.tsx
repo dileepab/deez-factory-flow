@@ -1,7 +1,11 @@
 import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import type { GarmentStyle, Operator } from '@/lib/types';
+import type { GarmentStyle, Operator, ProductionEntry } from '@/lib/types';
+import { format } from "date-fns";
+import { QuickLogModal } from "./quick-log-modal";
+import { useAuth } from "@/auth-provider";
+import { Plus, Check } from "lucide-react";
 
 interface Assignment {
     operationId: string;
@@ -15,10 +19,12 @@ interface DailyTimelineProps {
     selectedNextStyle?: GarmentStyle; // Support Next Style
     flowMetrics: Record<string, any>;
     availableMinutes: number;
-    schedule?: Record<string, { start: number, end: number, opId: string, count: number }[]>;
+    schedule?: Record<string, { start: number, end: number, opId: string, count: number, completed?: boolean }[]>;
+    productionLogs?: ProductionEntry[]; // Optional logs
 }
 
-export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule }: DailyTimelineProps) {
+export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule, productionLogs = [] }: DailyTimelineProps) {
+    const { user } = useAuth();
     // State for Mobile Tooltips
     const [openTooltipId, setOpenTooltipId] = useState<string | null>(null);
 
@@ -112,8 +118,12 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
         return parts;
     };
 
-    // State for View Mode
-    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('vertical'); // Default to vertical for operators
+    // State for View Mode and Quick Log
+    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('vertical');
+    const [quickLogOpen, setQuickLogOpen] = useState(false);
+    const [selectedLogSegment, setSelectedLogSegment] = useState<any>(null);
+    const [selectedLogOpId, setSelectedLogOpId] = useState<string>("");
+    const [selectedLogStyleId, setSelectedLogStyleId] = useState<string>("");
 
     // ... (Helper functions remain same)
 
@@ -126,12 +136,11 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                 <div className="space-y-8">
                     {segments.map((seg, i) => {
                         if (seg.isGap || seg.name === 'Tea' || seg.name === 'Lunch') {
-                            // Small dot for breaks
+                            // Centered Pill Badge for Breaks
                             return (
-                                <div key={i} className="relative flex items-center justify-center">
-                                    <div className="absolute left-[20px] md:left-1/2 -translate-x-1/2 w-4 h-4 rounded-full bg-slate-300 border-2 border-white z-10" />
-                                    <div className="ml-12 md:ml-0 md:absolute md:left-[55%] text-xs text-muted-foreground font-medium italic">
-                                        {formatTime(seg.start)} - {seg.name} ({Math.round(seg.end - seg.start)}m)
+                                <div key={i} className="relative flex items-center justify-center py-2 z-10">
+                                    <div className="ml-10 md:ml-0 bg-slate-100 text-slate-500 text-[10px] uppercase tracking-wider font-bold px-3 py-1 rounded-full border border-slate-200 shadow-sm">
+                                        {seg.name} • {Math.round(seg.end - seg.start)}m
                                     </div>
                                 </div>
                             );
@@ -139,13 +148,45 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
 
                         const isLeft = i % 2 === 0;
 
-                        return (
-                            <div key={i} className={`relative flex flex-col md:flex-row items-center ${isLeft ? 'md:flex-row-reverse' : ''}`}>
-                                {/* Timeline Dot */}
-                                <div className="absolute left-[20px] md:left-1/2 -translate-x-1/2 w-4 h-4 rounded-full border-2 border-white z-10 shadow-sm" style={{ backgroundColor: seg.color }} />
+                        // Check if completed
+                        // We replicate QuickLogModal logic to find matching range text? 
+                        // Or match by start/end/opId properties? 
+                        // Unfortunately logs store "07:30 - 08:30" string.
+                        // We must format segment start/end to string to match.
 
-                                {/* Time Label (Mobile: Next to dot, Desktop: On line) */}
-                                <div className="absolute left-[40px] md:left-1/2 md:-translate-x-1/2 -top-6 md:top-auto text-[10px] font-bold text-muted-foreground bg-white px-1">
+                        // Copy logic from QuickLogModal fix (add 450 offset)
+                        const SHIFT_OFFSET = 450;
+                        const formatM = (minutesFromShiftStart: number) => {
+                            const totalM = minutesFromShiftStart + SHIFT_OFFSET;
+                            const h = Math.floor(totalM / 60);
+                            const m = Math.floor(totalM % 60);
+                            return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+                        };
+                        const segmentRangeStr = `${formatM(seg.start)} - ${formatM(seg.end)}`;
+
+                        // ROBUST DISABLE: Check 'completed' flag from DB first
+                        const isCompletedFlag = seg.completed === true;
+
+                        const isLogFound = productionLogs.some(log =>
+                            log.operatorId === user.id &&
+                            String(log.operationId) === String(seg.opId) &&
+                            log.hourlyRange === segmentRangeStr
+                        );
+
+                        const isCompletedByUser = isCompletedFlag || isLogFound;
+
+                        return (
+                            <div key={i} className={`relative flex flex-col md:flex-row items-center ${isLeft ? 'md:flex-row-reverse' : ''} group`}>
+                                {/* Timeline Dot - Becomes Checkmark if done? No, keep it as anchor */}
+                                <div
+                                    className={`absolute left-[20px] md:left-1/2 -translate-x-1/2 w-3 h-3 rounded-full border-2 border-white z-10 shadow-sm transition-all duration-300 ${isCompletedByUser ? 'scale-125 ring-2 ring-emerald-100' : 'group-hover:scale-125'
+                                        }`}
+                                    style={{ backgroundColor: isCompletedByUser ? '#10b981' : seg.color }}
+                                />
+
+                                {/* Time Label */}
+                                <div className={`absolute left-[40px] md:left-1/2 -top-6 md:top-auto md:-translate-y-px text-[10px] font-mono font-medium text-slate-400 bg-white px-1.5 transition-colors ${isLeft ? 'md:translate-x-[-80px] md:text-left' : 'md:-translate-x-[calc(100%-80px)] md:text-right'
+                                    }`}>
                                     {formatTime(seg.start)}
                                 </div>
 
@@ -153,22 +194,52 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                 <div className="w-12 md:w-1/2 shrink-0 md:hidden" />
 
                                 {/* Content Card */}
-                                <div className={`w-[calc(100%-3rem)] md:w-[calc(50%-2rem)] ml-auto md:ml-0 p-4 rounded-lg border shadow-sm bg-white hover:shadow-md transition-shadow ${isLeft ? 'md:mr-8' : 'md:ml-8'}`} style={{ borderLeftColor: seg.color, borderLeftWidth: 4 }}>
-                                    <div className="flex justify-between items-start mb-2">
-                                        <h4 className="font-bold text-sm line-clamp-2">{seg.name}</h4>
-                                        <span className="text-xs font-mono font-bold bg-slate-100 px-2 py-0.5 rounded text-slate-700">
+                                <div className={`
+                                    relative w-[calc(100%-3rem)] md:w-[calc(50%-2rem)] ml-auto md:ml-0 p-3 pr-14 rounded-xl border bg-white shadow-sm transition-all duration-200 
+                                    ${isCompletedByUser ? 'border-emerald-100 bg-emerald-50/10' : 'hover:shadow-md hover:border-gray-300'}
+                                    ${isLeft ? 'md:mr-8' : 'md:ml-8'}
+                                `}
+                                    style={{ borderLeftColor: isCompletedByUser ? '#10b981' : seg.color, borderLeftWidth: 4 }}>
+
+                                    <div className="flex justify-between items-start mb-1.5">
+                                        <h4 className={`font-semibold text-sm line-clamp-2 leading-tight ${isCompletedByUser ? 'text-emerald-900 line-through decoration-emerald-500/30' : 'text-slate-800'}`}>
+                                            {seg.name}
+                                        </h4>
+                                        <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ml-2 whitespace-nowrap ${isCompletedByUser ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                                            }`}>
                                             {Math.round(seg.count)} pcs
                                         </span>
                                     </div>
-                                    <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                                        <div className="flex items-center gap-1">
-                                            <div className="w-2 h-2 rounded-full" style={{ backgroundColor: seg.color }} />
-                                            <span>{Math.round(seg.end - seg.start)} mins</span>
+
+                                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
+                                        <div className="flex items-center gap-1.5">
+                                            <div className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: seg.color }} />
+                                            <span>{Math.round(seg.end - seg.start)}m</span>
                                         </div>
-                                        <div className="font-mono">
+                                        <div className="font-mono opacity-75">
                                             {formatTime(seg.start)} - {formatTime(seg.end)}
                                         </div>
                                     </div>
+
+                                    {/* Quick Log Button - In Card */}
+                                    <button
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            if (isCompletedByUser) return;
+                                            setSelectedLogSegment({ ...seg });
+                                            setSelectedLogOpId(seg.opId);
+                                            setSelectedLogStyleId(seg.styleId);
+                                            setQuickLogOpen(true);
+                                        }}
+                                        disabled={isCompletedByUser}
+                                        className={`absolute top-1/2 -translate-y-1/2 right-3 w-9 h-9 flex items-center justify-center rounded-full transition-all duration-200 shadow-sm ${isCompletedByUser
+                                            ? 'bg-emerald-100 text-emerald-600 cursor-default ring-1 ring-emerald-200'
+                                            : 'bg-slate-100 text-slate-500 hover:bg-emerald-100 hover:text-emerald-600 hover:scale-110'
+                                            }`}
+                                        title={isCompletedByUser ? "Completed" : "Quick Log Production"}
+                                    >
+                                        {isCompletedByUser ? <Check className="w-5 h-5" strokeWidth={3} /> : <Plus className="w-5 h-5" strokeWidth={3} />}
+                                    </button>
                                 </div>
                             </div>
                         );
@@ -261,7 +332,10 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                     count: partCount,
                                                     start: cwStart,
                                                     end: cwEnd,
-                                                    isGap: false
+                                                    isGap: false,
+                                                    opId: op.id, // Add ID for quick log
+                                                    styleId: isNext && selectedNextStyle ? selectedNextStyle.id : selectedStyle.id,
+                                                    completed: ev.completed // Propagate completed flag
                                                 });
                                             });
                                         }
@@ -459,6 +533,15 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                     )}
                 </CardContent>
             </Card>
+
+            <QuickLogModal
+                isOpen={quickLogOpen}
+                onClose={() => setQuickLogOpen(false)}
+                segment={selectedLogSegment}
+                operatorId={user?.uid || ""}
+                opId={selectedLogOpId}
+                styleId={selectedLogStyleId}
+            />
         </TooltipProvider>
     );
 }

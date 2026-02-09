@@ -117,6 +117,7 @@ export interface ScheduleSegment {
     end: number;
     opId: string;
     count: number;
+    completed?: boolean;
 }
 
 export interface DailyPlan {

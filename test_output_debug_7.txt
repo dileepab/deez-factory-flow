@@ -1,0 +1,591 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/Dileepa/Personal/DEEZ/deez-factory-flow[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mhandles manual assignment
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mhandles auto-assign and publish
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mhandles auto-assign and publish
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mhandles auto-assign and publish
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mhandles auto-assign and publish
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mhandles operator removal
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mverifies operational instructions
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mcalculates KPIs correctly
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mrenders Actual Output split (Primary/Next)
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-3 {
+  id: [32m'op-3'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 3'[39m,
+  skills: [ [32m'Packing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-3 {
+  id: [32m'op-3'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 3'[39m,
+  skills: [ [32m'Packing'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mhandles machine constraint updates
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 1'[39m,
+  skills: [ [32m'Sewing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-2 {
+  id: [32m'op-2'[39m,
+  role: [32m'operator'[39m,
+  name: [32m'Operator 2'[39m,
+  skills: [ [32m'Iron'[39m ]
+} [33m1[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  name: [32m'Super Op'[39m,
+  role: [32m'operator'[39m,
+  skills: [ [32m'Cutter'[39m, [32m'Sewing'[39m, [32m'Packing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  name: [32m'Super Op'[39m,
+  role: [32m'operator'[39m,
+  skills: [ [32m'Cutter'[39m, [32m'Sewing'[39m, [32m'Packing'[39m ]
+} [33m1[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  name: [32m'Super Op'[39m,
+  role: [32m'operator'[39m,
+  skills: [ [32m'Cutter'[39m, [32m'Sewing'[39m, [32m'Packing'[39m ]
+} [33m2[39m
+[DEBUG-INSTRUCTIONS] op-1 {
+  id: [32m'op-1'[39m,
+  name: [32m'Super Op'[39m,
+  role: [32m'operator'[39m,
+  skills: [ [32m'Cutter'[39m, [32m'Sewing'[39m, [32m'Packing'[39m ]
+} [33m2[39m
+
+ [31m❯[39m src/components/dashboard/production-planner.test.tsx [2m([22m[2m14 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 2654[2mms[22m[39m
+     [33m[2m✓[22m[39m renders the planner and allows style selection [33m 584[2mms[22m[39m
+     [32m✓[39m allows selecting a Next Style (Continuous Flow)[32m 143[2mms[22m[39m
+     [32m✓[39m switches planning mode[32m 61[2mms[22m[39m
+     [32m✓[39m handles manual assignment[32m 91[2mms[22m[39m
+     [32m✓[39m handles auto-assign and publish[32m 152[2mms[22m[39m
+     [32m✓[39m handles operator removal[32m 113[2mms[22m[39m
+     [32m✓[39m updates configuration inputs[32m 112[2mms[22m[39m
+     [32m✓[39m verifies operational instructions[32m 71[2mms[22m[39m
+     [32m✓[39m calculates KPIs correctly[32m 66[2mms[22m[39m
+     [32m✓[39m passes correct props to DailyTimeline[32m 70[2mms[22m[39m
+     [32m✓[39m renders Actual Output split (Primary/Next)[32m 84[2mms[22m[39m
+     [32m✓[39m displays starvation warning when upstream is limited[32m 30[2mms[22m[39m
+     [32m✓[39m handles machine constraint updates[32m 31[2mms[22m[39m
+[31m     [31m×[31m generates correct operational advice (Flow vs Rotate)[39m[33m 1043[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/components/dashboard/production-planner.test.tsx[2m > [22mProductionPlanner[2m > [22mgenerates correct operational advice (Flow vs Rotate)
+[31m[1mTestingLibraryElementError[22m[39m: Unable to find an element with the text: /Cut -> Sew/. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<div[39m
+  [33mclass[39m=[32m"rounded-lg border bg-card text-card-foreground mt-6 border-dashed shadow-sm"[39m
+[36m>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6 pb-3"[39m
+  [36m>[39m
+    [36m<h3[39m
+      [33mclass[39m=[32m"tracking-tight flex items-center gap-2 text-base font-semibold"[39m
+    [36m>[39m
+      [36m<svg[39m
+        [33mclass[39m=[32m"lucide lucide-clipboard-list h-5 w-5 text-indigo-500"[39m
+        [33mfill[39m=[32m"none"[39m
+        [33mheight[39m=[32m"24"[39m
+        [33mstroke[39m=[32m"currentColor"[39m
+        [33mstroke-linecap[39m=[32m"round"[39m
+        [33mstroke-linejoin[39m=[32m"round"[39m
+        [33mstroke-width[39m=[32m"2"[39m
+        [33mviewBox[39m=[32m"0 0 24 24"[39m
+        [33mwidth[39m=[32m"24"[39m
+        [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+      [36m>[39m
+        [36m<rect[39m
+          [33mheight[39m=[32m"4"[39m
+          [33mrx[39m=[32m"1"[39m
+          [33mry[39m=[32m"1"[39m
+          [33mwidth[39m=[32m"8"[39m
+          [33mx[39m=[32m"8"[39m
+          [33my[39m=[32m"2"[39m
+        [36m/>[39m
+        [36m<path[39m
+          [33md[39m=[32m"M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"[39m
+        [36m/>[39m
+        [36m<path[39m
+          [33md[39m=[32m"M12 11h4"[39m
+        [36m/>[39m
+        [36m<path[39m
+          [33md[39m=[32m"M12 16h4"[39m
+        [36m/>[39m
+        [36m<path[39m
+          [33md[39m=[32m"M8 11h.01"[39m
+        [36m/>[39m
+        [36m<path[39m
+          [33md[39m=[32m"M8 16h.01"[39m
+        [36m/>[39m
+      [36m</svg>[39m
+      [0mOperational Execution Guide[0m
+    [36m</h3>[39m
+  [36m</div>[39m
+  [36m<div[39m
+    [33mclass[39m=[32m"p-6 pt-0"[39m
+  [36m>[39m
+    [36m<div[39m
+      [33mclass[39m=[32m"grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"[39m
+    [36m>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"relative p-4 rounded-lg border text-sm transition-colors bg-amber-500/10 border-amber-500/30"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex items-center justify-between mb-2"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"font-bold text-foreground"[39m
+          [36m>[39m
+            [0mSuper Op[0m
+          [36m</div>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"inline-flex items-center rounded-full border px-2.5 py-0.5 font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2 text-foreground text-[10px] h-5"[39m
+          [36m>[39m
+            [0mMulti-Task[0m
+          [36m</div>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"mb-3 text-muted-foreground text-xs font-medium"[39m
+        [36m>[39m
+          [0mAssignments: [0m
+          [0mCut, Sew[0m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex items-start gap-2 bg-background/80 p-2 rounded border border-border/50"[39m
+        [36m>[39m
+          [36m<svg[39m
+            [33mclass[39m=[32m"lucide lucide-refresh-ccw h-4 w-4 mt-0.5 text-blue-500 shrink-0"[39m
+            [33mfill[39m=[32m"none"[39m
+            [33mheight[39m=[32m"24"[39m
+            [33mstroke[39m=[32m"currentColor"[39m
+            [33mstroke-linecap[39m=[32m"round"[39m
+            [33mstroke-linejoin[39m=[32m"round"[39m
+            [33mstroke-width[39m=[32m"2"[39m
+            [33mviewBox[39m=[32m"0 0 24 24"[39m
+            [33mwidth[39m=[32m"24"[39m
+            [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+          [36m>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"[39m
+            [36m/>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M3 3v5h5"[39m
+            [36m/>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"[39m
+            [36m/>[39m
+            [36m<path[39m
+              [33md[39m=[32m"M16 16h5v5"[39m
+            [36m/>[39m
+          [36m</svg>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"italic text-xs leading-relaxed text-foreground/90"[39m
+          [36m>[39m
+            [0mSequential Flow Required. Perform batch: 15 pcs Cut -&gt; 15 pcs Sew. Maintain steady flow to prevent blockage.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+      [36m</div>[39m
+    [36m</div>[39m
+  [36m</div>[39m
+[36m</div>[39m
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"rounded-lg border bg-card text-card-foreground shadow-sm w-full"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6"[39m
+        [36m>[39m
+          [36m<h3[39m
+            [33mclass[39m=[32m"text-2xl font-semibold leading-none tracking-tight"[39m
+          [36m>[39m
+            [0mProduction Planner[0m
+          [36m</h3>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+          [36m>[39m
+            [0mPlan daily targets and balance the production line.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"p-2 md:p-6"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-col gap-6 mb-6 p-2 md:p-0"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex flex-col md:flex-row gap-4 items-end"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mSelect Style[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"style-mixed"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mChoose a style...[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-mixed"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mMixed Style[0m
+                      [0m [0m
+                      [36m<span[39m
+                        [33mclass[39m=[32m"text-muted-foreground ml-2"[39m
+                      [36m>[39m
+                        [0m([0m
+                        [0m10.00[0m
+                        [0m mins)[0m
+                      [36m</span>[39m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mNext Style (Continuous Flow)[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m""[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mSelect Next Style (Optional)[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"none"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mNone[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mPlanning Mode[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"capacity"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span />[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"target"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mTarget Driven (Set Qty)[0m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"capacity"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mCapacity Driven (Set Team Size)[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mAvailable Operators[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"multi-select"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mdata-testid[39m=[32m"selected-count"[39m
+                  [36m>[39m
+                    [0m1[0m
+                  [36m</span>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"option-op-1"[39m
+                  [36m>[39m
+                    [0mSuper Op[0m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/6 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mSwitch Delay (min)[0m
+                [36m</label>[39m
+                [36m<input[39m
+                  [33mclass[39m=[32m"flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background file:border-0 file:bg-transparent file:text...
+[90m [2m❯[22m Proxy.waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:[2m163:27[22m[39m
+[36m [2m❯[22m src/components/dashboard/production-planner.test.tsx:[2m663:15[22m[39m
+    [90m661| [39m
+    [90m662| [39m        [90m// Check Advice[39m
+    [90m663| [39m        [35mawait[39m [34mwaitFor[39m(() [33m=>[39m {
+    [90m   | [39m              [31m^[39m
+    [90m664| [39m            const guide = screen.getByText('Operational Execution Guid…
+    [90m665| [39m            [35mconst[39m card [33m=[39m guide[33m.[39m[34mclosest[39m([32m'.border-dashed'[39m)[33m;[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m13 passed[39m[22m[90m (14)[39m
+[2m   Start at [22m 13:32:32
+[2m   Duration [22m 9.69s[2m (transform 934ms, setup 0ms, import 3.72s, tests 2.65s, environment 2.70s)[22m
+

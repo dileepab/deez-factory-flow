@@ -13,13 +13,16 @@ import { Save, Calendar as CalendarIcon } from "lucide-react";
 import { useCollection } from "@/firebase/firestore/use-collection";
 import { firestore } from "@/firebase/client";
 import { collection, query, where } from "firebase/firestore";
-import type { User, GarmentStyle } from "@/lib/types";
+import type { User, GarmentStyle, DailyPlan } from "@/lib/types";
 import { useMemoFirebase } from "@/firebase/use-memo-firebase";
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Calendar } from "@/components/ui/calendar";
 import { format } from 'date-fns';
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/auth-provider";
+import { doc } from "firebase/firestore";
+import { useDoc } from "@/firebase/firestore/use-doc";
 
 const timeSlots = [
   "07:30 - 08:30", // 60 mins
@@ -65,10 +68,40 @@ const getDurationInMinutes = (range: string): number => {
   }
 };
 
+// Helper: Convert HH:MM string to Work Minutes (Minutes from 7:30)
+const getWorkMinutesFromTime = (timeStr: string): number => {
+  if (!timeStr) return -1;
+  const [h, m] = timeStr.split(':').map(Number);
+  // 7:30 AM = 0
+  // Time in minutes from midnight
+  const totalM = h * 60 + m;
+  const startM = 7 * 60 + 30; // 450
+  return totalM - startM;
+};
+
 export function ProductionEntry() {
+  const { user } = useAuth(); // Get current user
   const { toast } = useToast();
   const [entryDate, setEntryDate] = useState<Date>(new Date());
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+
+  // Fetch Daily Plan for the selected date
+  const dateStr = format(entryDate, 'yyyy-MM-dd');
+  const planRef = useMemoFirebase(() => doc(firestore, 'daily_plans', dateStr), [dateStr]);
+  const { data: dailyPlan } = useDoc<DailyPlan>(planRef);
+
+  // Fetch User Profile to get Role
+  const userProfileRef = useMemoFirebase(() => user ? doc(firestore, 'users', user.uid) : null, [user]);
+  const { data: userProfile } = useDoc<User>(userProfileRef);
+
+  const operatorsQuery = useMemoFirebase(
+    () => firestore ? query(collection(firestore, 'users'), where('role', '==', 'operator')) : null,
+    []
+  );
+  const { data: operators, isLoading: operatorsLoading } = useCollection<User>(operatorsQuery);
+
+  const stylesQuery = useMemoFirebase(() => firestore ? query(collection(firestore, 'styles'), where('status', '==', 'active')) : null, []);
+  const { data: styles, isLoading: stylesLoading } = useCollection<GarmentStyle>(stylesQuery);
 
   const form = useForm<z.infer<typeof productionSchema>>({
     resolver: zodResolver(productionSchema),
@@ -81,19 +114,67 @@ export function ProductionEntry() {
       reworkQuantity: 0,
     },
   });
-  
+
+  const selectedOperatorId = form.watch("operatorId");
   const selectedStyleId = form.watch("styleId");
   const selectedHourlyRange = form.watch("hourlyRange");
 
-  const operatorsQuery = useMemoFirebase(
-    () => firestore ? query(collection(firestore, 'users'), where('role', '==', 'operator')) : null, 
-    []
-  );
-  const { data: operators, isLoading: operatorsLoading } = useCollection<User>(operatorsQuery);
+  // Lock Operator Field if User is Operator
+  useEffect(() => {
+    if (userProfile && userProfile.role === 'operator') {
+      form.setValue("operatorId", userProfile.id);
+    }
+  }, [userProfile, form]);
 
-  const stylesQuery = useMemoFirebase(() => firestore ? query(collection(firestore, 'styles'), where('status', '==', 'active')) : null, []);
-  const { data: styles, isLoading: stylesLoading } = useCollection<GarmentStyle>(stylesQuery);
-  
+  // Smart Auto-Fill Logic
+  useEffect(() => {
+    if (!dailyPlan || !selectedOperatorId || !selectedHourlyRange) return;
+
+    const schedule = dailyPlan.schedules[selectedOperatorId];
+    if (!schedule) return;
+
+    // Parse selected range start
+    const [startStr] = selectedHourlyRange.split(' - ');
+    const checkTime = getWorkMinutesFromTime(startStr);
+
+    // Find segment covering this start time
+    const segment = schedule.find(s => s.start <= checkTime && s.end > checkTime);
+
+    if (segment) {
+      if (!styles) return;
+
+      let targetStyleId = dailyPlan.styleId;
+      const primaryStyle = styles.find(s => s.id === dailyPlan.styleId);
+      const isPrimary = primaryStyle?.operations.some(o => o.id === segment.opId);
+
+      if (!isPrimary && dailyPlan.nextStyleId) {
+        targetStyleId = dailyPlan.nextStyleId;
+      }
+
+      if (targetStyleId) {
+        form.setValue("styleId", targetStyleId);
+        // Set Operation ID
+        // Note: Ideally we wait for style change to propagate, but with react-hook-form 
+        // setting both synchronously works if values are valid. 
+        // The Select options depend on selectedStyleId which changes on next render.
+        // However, form.setValue updates internal state immediately.
+        // We might need to ensure the select component re-renders with new options.
+        // We perform this in one go.
+        form.setValue("operationId", segment.opId);
+
+        const slotDuration = getDurationInMinutes(selectedHourlyRange);
+        const targetStyle = styles.find(s => s.id === targetStyleId);
+        const op = targetStyle?.operations.find(o => o.id === segment.opId);
+
+        if (op && op.smv > 0) {
+          const predictedQty = Math.floor(slotDuration / op.smv);
+          form.setValue("quantity", predictedQty);
+        }
+      }
+    }
+
+  }, [selectedHourlyRange, selectedOperatorId, dailyPlan, styles, form]);
+
   const operations = useMemo(() => {
     if (!selectedStyleId || !styles) return [];
     const selectedStyle = styles.find(style => style.id === selectedStyleId);
@@ -114,7 +195,7 @@ export function ProductionEntry() {
         ...values,
         workedMinutes,
         // Pass the selected date to the API. It must be in a serializable format.
-        date: entryDate.toISOString(), 
+        date: entryDate.toISOString(),
       };
 
       const response = await fetch('/api/log-production', {
@@ -130,7 +211,7 @@ export function ProductionEntry() {
       if (!response.ok) {
         throw new Error(result.message || "An unknown error occurred.");
       }
-      
+
       toast({
         title: "Production Logged",
         description: `Successfully logged ${values.quantity} units for ${operatorName} on ${format(entryDate, "PPP")}.`,
@@ -144,8 +225,8 @@ export function ProductionEntry() {
       });
 
     } catch (error) {
-       console.error("Error logging production: ", error);
-       toast({
+      console.error("Error logging production: ", error);
+      toast({
         variant: "destructive",
         title: "Error",
         description: error instanceof Error ? error.message : "Failed to log production data.",
@@ -198,7 +279,12 @@ export function ProductionEntry() {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Operator</FormLabel>
-                  <Select onValueChange={field.onChange} value={field.value} disabled={operatorsLoading}>
+                  {/* Lock dropdown if user is operator */}
+                  <Select
+                    onValueChange={field.onChange}
+                    value={field.value}
+                    disabled={operatorsLoading || (userProfile?.role === 'operator' && userProfile.id === field.value)}
+                  >
                     <FormControl>
                       <SelectTrigger>
                         <SelectValue placeholder={operatorsLoading ? "Loading..." : "Select an operator"} />
@@ -218,12 +304,12 @@ export function ProductionEntry() {
               render={({ field }) => (
                 <FormItem>
                   <FormLabel>Garment Style</FormLabel>
-                  <Select 
+                  <Select
                     onValueChange={(value) => {
                       field.onChange(value);
                       form.setValue('operationId', '');
-                    }} 
-                    value={field.value} 
+                    }}
+                    value={field.value}
                     disabled={stylesLoading}
                   >
                     <FormControl>
@@ -232,14 +318,14 @@ export function ProductionEntry() {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                       {styles?.map(style => <SelectItem key={style.id} value={style.id}>{style.name}</SelectItem>)}
+                      {styles?.map(style => <SelectItem key={style.id} value={style.id}>{style.name}</SelectItem>)}
                     </SelectContent>
                   </Select>
                   <FormMessage />
                 </FormItem>
               )}
             />
-             <FormField
+            <FormField
               control={form.control}
               name="hourlyRange"
               render={({ field }) => (
@@ -272,7 +358,7 @@ export function ProductionEntry() {
                       </SelectTrigger>
                     </FormControl>
                     <SelectContent>
-                    {operations.map(op => {
+                      {operations.map(op => {
                         const duration = getDurationInMinutes(selectedHourlyRange);
                         const smv = op.smv;
                         const targetQuantity = duration > 0 && smv > 0 ? Math.floor((duration * 60) / smv) : 0;

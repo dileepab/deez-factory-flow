@@ -1,0 +1,281 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/Dileepa/Personal/DEEZ/deez-factory-flow[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mgenerates correct operational advice (Flow vs Rotate)
+[22m[39m[DEBUG-COMMAND] <input placeholder="Search operator..."><div><div>No skilled operators found.</div><div></div><div></div></div>
+
+ [31m❯[39m src/components/dashboard/production-planner.test.tsx [2m([22m[2m14 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 1928[2mms[22m[39m
+     [32m✓[39m renders the planner and allows style selection[32m 168[2mms[22m[39m
+     [32m✓[39m allows selecting a Next Style (Continuous Flow)[32m 99[2mms[22m[39m
+     [32m✓[39m switches planning mode[32m 58[2mms[22m[39m
+     [32m✓[39m handles manual assignment[32m 98[2mms[22m[39m
+     [32m✓[39m handles auto-assign and publish[32m 137[2mms[22m[39m
+     [32m✓[39m handles operator removal[32m 78[2mms[22m[39m
+     [32m✓[39m updates configuration inputs[32m 81[2mms[22m[39m
+     [32m✓[39m verifies operational instructions[32m 31[2mms[22m[39m
+     [32m✓[39m calculates KPIs correctly[32m 32[2mms[22m[39m
+     [32m✓[39m passes correct props to DailyTimeline[32m 30[2mms[22m[39m
+     [32m✓[39m renders Actual Output split (Primary/Next)[32m 32[2mms[22m[39m
+     [32m✓[39m displays starvation warning when upstream is limited[32m 25[2mms[22m[39m
+     [32m✓[39m handles machine constraint updates[32m 27[2mms[22m[39m
+[31m     [31m×[31m generates correct operational advice (Flow vs Rotate)[39m[33m 1029[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/components/dashboard/production-planner.test.tsx[2m > [22mProductionPlanner[2m > [22mgenerates correct operational advice (Flow vs Rotate)
+[31m[1mTestingLibraryElementError[22m[39m: Unable to find an element with the text: Super Op. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.
+
+Ignored nodes: comments, script, style
+[36m<div[39m
+  [33mdata-testid[39m=[32m"command"[39m
+[36m>[39m
+  [36m<input[39m
+    [33mplaceholder[39m=[32m"Search operator..."[39m
+  [36m/>[39m
+  [36m<div>[39m
+    [36m<div>[39m
+      [0mNo skilled operators found.[0m
+    [36m</div>[39m
+    [36m<div />[39m
+    [36m<div />[39m
+  [36m</div>[39m
+[36m</div>[39m
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"rounded-lg border bg-card text-card-foreground shadow-sm w-full"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6"[39m
+        [36m>[39m
+          [36m<h3[39m
+            [33mclass[39m=[32m"text-2xl font-semibold leading-none tracking-tight"[39m
+          [36m>[39m
+            [0mProduction Planner[0m
+          [36m</h3>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+          [36m>[39m
+            [0mPlan daily targets and balance the production line.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"p-2 md:p-6"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-col gap-6 mb-6 p-2 md:p-0"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex flex-col md:flex-row gap-4 items-end"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mSelect Style[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"style-mixed"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mChoose a style...[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-mixed"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mMixed Style[0m
+                      [0m [0m
+                      [36m<span[39m
+                        [33mclass[39m=[32m"text-muted-foreground ml-2"[39m
+                      [36m>[39m
+                        [0m([0m
+                        [0m10.00[0m
+                        [0m mins)[0m
+                      [36m</span>[39m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mNext Style (Continuous Flow)[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m""[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mSelect Next Style (Optional)[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"none"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mNone[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mPlanning Mode[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"capacity"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span />[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"target"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mTarget Driven (Set Qty)[0m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"capacity"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mCapacity Driven (Set Team Size)[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mAvailable Operators[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"multi-select"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mdata-testid[39m=[32m"selected-count"[39m
+                  [36m>[39m
+                    [0m0[0m
+                  [36m</span>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/6 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mSwitch Delay (min)[0m
+                [36m</label>[39m
+                [36m<input[39m
+                  [33mclass[39m=[32m"flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base ring-offset-background file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allow...
+[90m [2m❯[22m Proxy.waitForWrapper node_modules/@testing-library/dom/dist/wait-for.js:[2m163:27[22m[39m
+[36m [2m❯[22m src/components/dashboard/production-planner.test.tsx:[2m647:15[22m[39m
+    [90m645| [39m
+    [90m646| [39m        [90m// Wait for operator to populate (useEffect timing)[39m
+    [90m647| [39m        [35mawait[39m [34mwaitFor[39m(() [33m=>[39m {
+    [90m   | [39m              [31m^[39m
+    [90m648| [39m            [90m// Debug command content[39m
+    [90m649| [39m            [35mif[39m ([33m![39m[34mwithin[39m(commands[[34m0[39m])[33m.[39m[34mqueryByText[39m([32m'Super Op'[39m)) {
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m13 passed[39m[22m[90m (14)[39m
+[2m   Start at [22m 13:11:07
+[2m   Duration [22m 4.34s[2m (transform 445ms, setup 0ms, import 991ms, tests 1.93s, environment 1.12s)[22m
+

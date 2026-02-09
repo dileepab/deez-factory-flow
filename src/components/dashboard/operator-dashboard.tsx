@@ -2,18 +2,20 @@
 
 import { useAuth } from "@/auth-provider";
 import { useDoc } from "@/firebase/firestore/use-doc";
-import { doc } from "firebase/firestore";
+import { doc, collection, query, where } from "firebase/firestore";
 import { firestore } from "@/firebase/client";
+import { useCollection } from "@/firebase/firestore/use-collection";
+import { useMemo } from "react";
+import type { Operator, DailyPlan, GarmentStyle, ProductionEntry } from "@/lib/types";
 import { useMemoFirebase } from "@/firebase/use-memo-firebase";
 import { useConfiguration } from "@/firebase/firestore/use-configuration";
 import { PageHeader } from "@/components/shared/page-header";
 import { StatCard } from "@/components/dashboard/stat-card";
 import { SalarySlip } from "@/components/dashboard/salary-slip";
 import { Target, BarChart, Package, AlertTriangle, Loader2, ClipboardList, Settings2 } from "lucide-react";
-import type { Operator, DailyPlan, GarmentStyle } from "@/lib/types";
+import { format } from "date-fns";
 import { getActualWorkingDays } from "@/lib/utils";
 import { DailyTimeline } from "./daily-timeline";
-import { format } from "date-fns";
 
 export function OperatorDashboard() {
   const { user, loading: isUserLoading } = useAuth();
@@ -54,6 +56,25 @@ export function OperatorDashboard() {
 
   const mySchedule = dailyPlan?.schedules?.[user?.uid || ''];
   const hasSchedule = !!mySchedule;
+
+  // --- Fetch Logs for Completion Tracking ---
+  const logsQuery = useMemoFirebase(() =>
+    (firestore && user?.uid)
+      ? query(collection(firestore, 'production_logs'), where('operatorId', '==', user.uid))
+      : null,
+    [user]);
+
+  const { data: allLogs } = useCollection<ProductionEntry>(logsQuery);
+
+  const todayLogs = useMemo(() => {
+    if (!allLogs) return [] as ProductionEntry[];
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    return allLogs.filter(log => {
+      // Handle diverse date formats safely
+      const d = (log as any).date ? new Date((log as any).date) : (log.timestamp?.toDate ? log.timestamp.toDate() : new Date((log as any).timestamp?.seconds * 1000 || Date.now()));
+      return format(d, 'yyyy-MM-dd') === todayStr;
+    });
+  }, [allLogs]);
 
   const isLoading = isUserLoading || isOperatorLoading || isConfigLoading;
 
@@ -136,6 +157,7 @@ export function OperatorDashboard() {
             flowMetrics={{}}
             availableMinutes={config?.availableMinutesPerDay || 480}
             schedule={{ [operator.id]: mySchedule }}
+            productionLogs={todayLogs}
           />
         </div>
       )}

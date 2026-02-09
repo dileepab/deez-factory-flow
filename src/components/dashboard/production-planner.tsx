@@ -46,6 +46,62 @@ import type { DailyPlan, ScheduleSegment } from "@/lib/types";
 import { format } from "date-fns";
 import { Save, CalendarClock } from "lucide-react";
 
+// Helper function to calculate output from simulation event
+// Exported for testing
+export function calculateOutputFromEvent(
+    event: { opId: string; count: number },
+    primaryFinalOps: any[],
+    nextFinalOps: any[]
+): { primary: number; next: number } {
+    if (primaryFinalOps.find(f => f.id === event.opId)) {
+        return { primary: event.count, next: 0 };
+    } else if (nextFinalOps.find(f => f.id === event.opId)) {
+        return { primary: 0, next: event.count };
+    }
+    return { primary: 0, next: 0 };
+}
+
+// Helper function to generate operator advice based on task assignments
+// Exported for testing
+export function generateOperatorAdvice(
+    hasMixedStyles: boolean,
+    userOps: Array<{ op: any; style: 'primary' | 'next' }>,
+    batchStrings: string[]
+): { type: 'flow' | 'rotate'; advice: string } {
+    if (hasMixedStyles) {
+        const primaryTasks = userOps.filter(o => o.style === 'primary').map(o => o.op.name).join(', ');
+        return {
+            type: 'flow',
+            advice: `Transition Required. Complete Primary Style tasks (${primaryTasks}), then switch to Next Style.`
+        };
+    }
+
+    // Standard Logic for single style multi-task
+    const myOpIds = userOps.map(o => o.op.id);
+    let hasSelfDependency = false;
+
+    for (const { op } of userOps) {
+        if (op.dependencies?.some((d: string) => myOpIds.includes(d))) {
+            hasSelfDependency = true;
+            break;
+        }
+    }
+
+    if (hasSelfDependency) {
+        const flowSteps = batchStrings.join(' -> ');
+        return {
+            type: 'flow',
+            advice: `Sequential Flow Required. Perform batch: ${flowSteps}. Maintain steady flow to prevent blockage.`
+        };
+    }
+
+    const batchCycle = batchStrings.join(', then ');
+    return {
+        type: 'rotate',
+        advice: `Split / Rotation Priority. Recommended Batch Cycle: ${batchCycle}.`
+    };
+}
+
 
 
 export function ProductionPlanner(): React.ReactNode {
@@ -618,10 +674,11 @@ export function ProductionPlanner(): React.ReactNode {
                 publishedBy: user?.uid || 'unknown',
                 publishedAt: Timestamp.now(),
                 styleId: selectedStyleId,
-                nextStyleId: selectedNextStyleId || undefined,
+                ...(selectedNextStyleId && { nextStyleId: selectedNextStyleId }),
                 assignments: [...assignments, ...nextAssignments],
                 schedules: simResult.schedule as unknown as Record<string, ScheduleSegment[]>
             };
+
 
             await setDoc(planRef, planData);
 
@@ -749,16 +806,30 @@ export function ProductionPlanner(): React.ReactNode {
                 // but we want split.
                 // For now, if styles are different, this works.
 
-                if (finalOps.find(f => f.id === ev.opId)) {
-                    primaryTotal += ev.count;
-                } else if (nextFinalOps.find(f => f.id === ev.opId)) {
-                    nextTotal += ev.count;
-                }
+                const outputCounts = calculateOutputFromEvent(ev, finalOps, nextFinalOps);
+                primaryTotal += outputCounts.primary;
+                nextTotal += outputCounts.next;
             });
         });
 
         return { primary: Math.floor(primaryTotal), next: Math.floor(nextTotal) };
     }, [selectedStyle, selectedNextStyle, simResult.schedule]);
+
+    // Calculate actual scheduled completion count per operation from simulation
+    const scheduledCountPerOp = useMemo(() => {
+        const counts: Record<string, number> = {};
+        if (!simResult.schedule) return counts;
+
+        // Sum up all completion events for each operation
+        Object.values(simResult.schedule).forEach(events => {
+            events.forEach(ev => {
+                if (!counts[ev.opId]) counts[ev.opId] = 0;
+                counts[ev.opId] += ev.count;
+            });
+        });
+
+        return counts;
+    }, [simResult.schedule]);
 
     // Helper to generate instructions
     const instructions = useMemo(() => {
@@ -839,29 +910,9 @@ export function ProductionPlanner(): React.ReactNode {
                 // Simplified check: if mixed styles, usually flow implies finish primary then next
                 const hasMixedStyles = userOps.some(o => o.style === 'primary') && userOps.some(o => o.style === 'next');
 
-                if (hasMixedStyles) {
-                    type = 'flow';
-                    advice = `Transition Required. Complete Primary Style tasks (${userOps.filter(o => o.style === 'primary').map(o => o.op.name).join(', ')}), then switch to Next Style.`;
-                } else {
-                    // Standard Logic for single style multi-task
-                    const style = userOps[0].style; // All same
-                    const myOpIds = userOps.map(o => o.op.id);
-                    for (const { op } of userOps) {
-                        if (op.dependencies?.some(d => myOpIds.includes(d))) {
-                            hasSelfDependency = true;
-                        }
-                    }
-
-                    if (hasSelfDependency) {
-                        type = 'flow';
-                        const flowSteps = batchStrings.join(' -> ');
-                        advice = `Sequential Flow Required. Perform batch: ${flowSteps}. Maintain steady flow to prevent blockage.`;
-                    } else {
-                        type = 'rotate';
-                        const batchCycle = batchStrings.join(', then ');
-                        advice = `Split / Rotation Priority. Recommended Batch Cycle: ${batchCycle}.`;
-                    }
-                }
+                const adviceResult = generateOperatorAdvice(hasMixedStyles, userOps, batchStrings);
+                type = adviceResult.type;
+                advice = adviceResult.advice;
             }
 
             list.push({
@@ -1060,6 +1111,7 @@ export function ProductionPlanner(): React.ReactNode {
                                         <TableHead>Machine</TableHead>
                                         <TableHead className="text-right">Req. Operators</TableHead>
                                         <TableHead>Assigned Operators</TableHead>
+                                        <TableHead className="text-right">Daily Target</TableHead>
                                         <TableHead className="text-center">Status</TableHead>
                                     </TableRow>
                                 </TableHeader>
@@ -1091,21 +1143,21 @@ export function ProductionPlanner(): React.ReactNode {
                                                             const weight = metric.operatorWeights?.get(opUser.id) || 1;
                                                             const eff = (opUser.efficiencyRating || 100) * weight;
 
-                                                            return (
-                                                                <Badge key={opUser.id} variant="secondary" className="flex items-center gap-1 pr-1">
-                                                                    {opUser.name}
-                                                                    <span className="text-[10px] text-muted-foreground">({Math.round(eff)}%)</span>
-                                                                    {operatorLoads[opUser.id] > 1 && (
-                                                                        <span className="text-[10px] text-amber-600 font-bold">
-                                                                            (x{operatorLoads[opUser.id]})
-                                                                        </span>
-                                                                    )}
-                                                                    <X
-                                                                        className="h-3 w-3 cursor-pointer hover:text-destructive"
-                                                                        onClick={() => handleRemoveOperator(op.id, opUser.id)}
-                                                                    />
-                                                                </Badge>
-                                                            )
+                                                            return <Badge key={opUser.id} variant="secondary" className="flex items-center gap-1 pr-1" data-testid="operator-badge">
+                                                                {opUser.name}
+                                                                <span className="text-[10px] text-muted-foreground">({Math.round(eff)}%)</span>
+                                                                {operatorLoads[opUser.id] > 1 && (
+                                                                    <span className="text-[10px] text-amber-600 font-bold">
+                                                                        (x{operatorLoads[opUser.id]})
+                                                                    </span>
+                                                                )}
+                                                                <X
+                                                                    className="h-3 w-3 cursor-pointer hover:text-destructive"
+                                                                    onClick={() => handleRemoveOperator(op.id, opUser.id)}
+                                                                    data-testid="remove-operator"
+                                                                />
+                                                            </Badge>
+
                                                         })}
 
                                                         <Popover>
@@ -1149,6 +1201,21 @@ export function ProductionPlanner(): React.ReactNode {
                                                                 </Command>
                                                             </PopoverContent>
                                                         </Popover>
+                                                    </div>
+                                                </TableCell>
+                                                <TableCell className="text-right">
+                                                    <div className="flex flex-col items-end gap-0.5">
+                                                        <span className={`text-sm font-semibold ${(scheduledCountPerOp[op.id] || 0) >= dailyTarget
+                                                            ? 'text-green-600'
+                                                            : (scheduledCountPerOp[op.id] || 0) >= dailyTarget * 0.8
+                                                                ? 'text-amber-600'
+                                                                : 'text-red-600'
+                                                            }`}>
+                                                            {Math.floor(scheduledCountPerOp[op.id] || 0)}
+                                                        </span>
+                                                        <span className="text-[10px] text-muted-foreground">
+                                                            / {dailyTarget} units
+                                                        </span>
                                                     </div>
                                                 </TableCell>
                                                 <TableCell className="text-center">
