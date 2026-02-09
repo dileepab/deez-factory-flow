@@ -1,0 +1,290 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/Dileepa/Personal/DEEZ/deez-factory-flow[39m
+
+ [31m❯[39m src/components/dashboard/production-planner.test.tsx [2m([22m[2m11 tests[22m[2m | [22m[31m2 failed[39m[2m)[22m[33m 2006[2mms[22m[39m
+     [33m[2m✓[22m[39m renders the planner and allows style selection [33m 395[2mms[22m[39m
+     [32m✓[39m allows selecting a Next Style (Continuous Flow)[32m 82[2mms[22m[39m
+     [32m✓[39m switches planning mode[32m 47[2mms[22m[39m
+     [32m✓[39m handles manual assignment[32m 63[2mms[22m[39m
+     [32m✓[39m handles auto-assign and publish[32m 102[2mms[22m[39m
+     [32m✓[39m handles operator removal[32m 69[2mms[22m[39m
+     [32m✓[39m updates configuration inputs[32m 67[2mms[22m[39m
+     [32m✓[39m verifies operational instructions[32m 26[2mms[22m[39m
+[31m     [31m×[31m calculates KPIs correctly[39m[32m 33[2mms[22m[39m
+[31m     [31m×[31m passes correct props to DailyTimeline[39m[33m 1041[2mms[22m[39m
+     [32m✓[39m renders Actual Output split (Primary/Next)[32m 78[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 2 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/components/dashboard/production-planner.test.tsx[2m > [22mProductionPlanner[2m > [22mcalculates KPIs correctly
+[31m[1mTestingLibraryElementError[22m: Found multiple elements with the text: /pcs/
+
+Here are the matching elements:
+
+Ignored nodes: comments, script, style
+[36m<span[31m
+  [33mclass[31m=[32m"text-sm text-primary/80"[31m
+[36m>[31m
+  [0mpcs (Current)[0m
+[36m</span>[31m
+
+Ignored nodes: comments, script, style
+[36m<div[31m
+  [33mclass[31m=[32m"text-[10px] text-destructive font-medium mt-1"[31m
+[36m>[31m
+  [0mLoss: [0m
+  [0m119[0m
+  [0m pcs ([0m
+  [0m82.6[0m
+  [0m%)[0m
+[36m</div>[31m
+
+(If this is intentional, then use the `*AllBy*` variant of the query (like `queryAllByText`, `getAllByText`, or `findAllByText`)).
+
+Ignored nodes: comments, script, style
+[36m<div[31m
+  [33mclass[31m=[32m"p-3 bg-primary/10 border border-primary/20 rounded-md flex flex-col items-end min-w-[150px]"[31m
+[36m>[31m
+  [36m<span[31m
+    [33mclass[31m=[32m"text-xs text-primary font-medium uppercase tracking-wider"[31m
+    [33mtitle[31m=[32m"Total finished goods produced today"[31m
+  [36m>[31m
+    [0mActual Output[0m
+  [36m</span>[31m
+  [36m<div[31m
+    [33mclass[31m=[32m"flex flex-col items-end"[31m
+  [36m>[31m
+    [36m<div[31m
+      [33mclass[31m=[32m"flex items-baseline gap-1"[31m
+    [36m>[31m
+      [36m<span[31m
+        [33mclass[31m=[32m"text-3xl font-bold text-primary"[31m
+      [36m>[31m
+        [0m25[0m
+      [36m</span>[31m
+      [36m<span[31m
+        [33mclass[31m=[32m"text-sm text-primary/80"[31m
+      [36m>[31m
+        [0mpcs (Current)[0m
+      [36m</span>[31m
+    [36m</div>[31m
+  [36m</div>[31m
+  [36m<div[31m
+    [33mclass[31m=[32m"text-[10px] text-destructive font-medium mt-1"[31m
+  [36m>[31m
+    [0mLoss: [0m
+    [0m119[0m
+    [0m pcs ([0m
+    [0m82.6[0m
+    [0m%)[0m
+  [36m</div>[31m
+[36m</div>[31m[39m
+[90m [2m❯[22m Object.getElementError node_modules/@testing-library/dom/dist/config.js:[2m37:19[22m[39m
+[90m [2m❯[22m getElementError node_modules/@testing-library/dom/dist/query-helpers.js:[2m20:35[22m[39m
+[90m [2m❯[22m getMultipleElementsFoundError node_modules/@testing-library/dom/dist/query-helpers.js:[2m23:10[22m[39m
+[90m [2m❯[22m node_modules/@testing-library/dom/dist/query-helpers.js:[2m55:13[22m[39m
+[90m [2m❯[22m node_modules/@testing-library/dom/dist/query-helpers.js:[2m95:19[22m[39m
+[36m [2m❯[22m src/components/dashboard/production-planner.test.tsx:[2m429:54[22m[39m
+    [90m427| [39m        [90m// eslint-disable-next-line testing-library/no-node-access[39m
+    [90m428| [39m        [35mconst[39m valueContainer [33m=[39m label[33m.[39mparentElement[33m;[39m
+    [90m429| [39m        expect(within(valueContainer as HTMLElement).getByText(/pcs/))…
+    [90m   | [39m                                                     [31m^[39m
+    [90m430| [39m    })[33m;[39m
+    [90m431| [39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/components/dashboard/production-planner.test.tsx[2m > [22mProductionPlanner[2m > [22mpasses correct props to DailyTimeline
+[31m[1mAssertionError[22m[39m: expected undefined to be defined
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"rounded-lg border bg-card text-card-foreground shadow-sm w-full"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6"[39m
+        [36m>[39m
+          [36m<h3[39m
+            [33mclass[39m=[32m"text-2xl font-semibold leading-none tracking-tight"[39m
+          [36m>[39m
+            [0mProduction Planner[0m
+          [36m</h3>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+          [36m>[39m
+            [0mPlan daily targets and balance the production line.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"p-2 md:p-6"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-col gap-6 mb-6 p-2 md:p-0"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex flex-col md:flex-row gap-4 items-end"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mSelect Style[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"style-1"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mChoose a style...[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-1"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mStyle A[0m
+                      [0m [0m
+                      [36m<span[39m
+                        [33mclass[39m=[32m"text-muted-foreground ml-2"[39m
+                      [36m>[39m
+                        [0m([0m
+                        [0m10.00[0m
+                        [0m mins)[0m
+                      [36m</span>[39m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-2"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mStyle B[0m
+                      [0m [0m
+                      [36m<span[39m
+                        [33mclass[39m=[32m"text-muted-foreground ml-2"[39m
+                      [36m>[39m
+                        [0m([0m
+                        [0m15.00[0m
+                        [0m mins)[0m
+                      [36m</span>[39m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mNext Style (Continuous Flow)[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m""[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mSelect Next Style (Optional)[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"none"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mNone[0m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-2"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mStyle B[0m
+                      [0m ([0m
+                      [0m15.00[0m
+                      [0m mins)[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mPlanning Mode[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"capacity"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span />[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"target"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mTarget Driven (Set Qty)[0m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"capacity"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mCapacity Driven (Set Team Size)[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mAvailable Operators[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"multi-select"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mdata-tes...
+[36m [2m❯[22m src/components/dashboard/production-planner.test.tsx:[2m447:36[22m[39m
+    [90m445| [39m            if (!dataProps || dataProps === '{}') console.log('[DEBUG-…
+    [90m446| [39m            [35mconst[39m props [33m=[39m [33mJSON[39m[33m.[39m[34mparse[39m(dataProps [33m||[39m [32m'{}'[39m)[33m;[39m
+    [90m447| [39m            [34mexpect[39m(props[33m.[39msegments)[33m.[39m[34mtoBeDefined[39m()[33m;[39m
+    [90m   | [39m                                   [31m^[39m
+    [90m448| [39m            [34mexpect[39m(props[33m.[39msegments[[32m'op-1'[39m])[33m.[39m[34mtoBeDefined[39m()[33m;[39m
+    [90m449| [39m            [34mexpect[39m(props[33m.[39msegments[[32m'op-1'[39m][33m.[39mlength)[33m.[39m[34mtoBeGreaterThan[39m([34m0[39m)[33m;[39m
+[90m [2m❯[22m runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:[2m47:12[22m[39m
+[90m [2m❯[22m checkCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m124:77[22m[39m
+[90m [2m❯[22m Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m118:16[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m2 failed[39m[22m[2m | [22m[1m[32m9 passed[39m[22m[90m (11)[39m
+[2m   Start at [22m 13:07:02
+[2m   Duration [22m 3.75s[2m (transform 293ms, setup 0ms, import 823ms, tests 2.01s, environment 737ms)[22m
+

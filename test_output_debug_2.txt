@@ -1,0 +1,272 @@
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90m/Users/Dileepa/Personal/DEEZ/deez-factory-flow[39m
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+[90mstdout[2m | src/components/dashboard/production-planner.test.tsx[2m > [22m[2mProductionPlanner[2m > [22m[2mpasses correct props to DailyTimeline
+[22m[39m[DEBUG-PROPS-FULL] {"assignedOperators":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]},{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"assignments":[{"operationId":"task-1","operatorIds":["op-1"]},{"operationId":"task-2","operatorIds":["op-2"]}],"selectedStyle":{"id":"style-1","name":"Style A","status":"active","totalSmv":10,"operations":[{"id":"task-1","name":"Task 1","smv":5,"machineType":"Sewing"},{"id":"task-2","name":"Task 2","smv":5,"machineType":"Iron"}]},"flowMetrics":{"task-1":{"localCapacity":100,"upstreamLimit":null,"effectiveOutput":100,"isStarved":false,"assignedOps":[{"id":"op-1","role":"operator","name":"Operator 1","skills":["Sewing"]}],"percentFilled":69.44444444444444,"reqOperators":0.025,"operatorWeights":{}},"task-2":{"localCapacity":50,"upstreamLimit":null,"effectiveOutput":50,"isStarved":false,"assignedOps":[{"id":"op-2","role":"operator","name":"Operator 2","skills":["Iron"]}],"percentFilled":34.72222222222222,"reqOperators":0.025,"operatorWeights":{}}},"availableMinutes":480,"schedule":{"op-1":[{"start":0,"end":60,"opId":"task-1","count":10}],"op-2":[{"start":0,"end":60,"opId":"task-2","count":15}]}}
+
+ [31m❯[39m src/components/dashboard/production-planner.test.tsx [2m([22m[2m11 tests[22m[2m | [22m[31m1 failed[39m[2m)[22m[33m 1764[2mms[22m[39m
+     [32m✓[39m renders the planner and allows style selection[32m 153[2mms[22m[39m
+     [32m✓[39m allows selecting a Next Style (Continuous Flow)[32m 74[2mms[22m[39m
+     [32m✓[39m switches planning mode[32m 47[2mms[22m[39m
+     [32m✓[39m handles manual assignment[32m 61[2mms[22m[39m
+     [32m✓[39m handles auto-assign and publish[32m 100[2mms[22m[39m
+     [32m✓[39m handles operator removal[32m 71[2mms[22m[39m
+     [32m✓[39m updates configuration inputs[32m 80[2mms[22m[39m
+     [32m✓[39m verifies operational instructions[32m 27[2mms[22m[39m
+     [32m✓[39m calculates KPIs correctly[32m 29[2mms[22m[39m
+[31m     [31m×[31m passes correct props to DailyTimeline[39m[33m 1040[2mms[22m[39m
+     [32m✓[39m renders Actual Output split (Primary/Next)[32m 80[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 1 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/components/dashboard/production-planner.test.tsx[2m > [22mProductionPlanner[2m > [22mpasses correct props to DailyTimeline
+[31m[1mAssertionError[22m[39m: expected undefined to be defined
+
+Ignored nodes: comments, script, style
+[36m<html>[39m
+  [36m<head />[39m
+  [36m<body>[39m
+    [36m<div>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"rounded-lg border bg-card text-card-foreground shadow-sm w-full"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-col space-y-1.5 p-6"[39m
+        [36m>[39m
+          [36m<h3[39m
+            [33mclass[39m=[32m"text-2xl font-semibold leading-none tracking-tight"[39m
+          [36m>[39m
+            [0mProduction Planner[0m
+          [36m</h3>[39m
+          [36m<p[39m
+            [33mclass[39m=[32m"text-sm text-muted-foreground"[39m
+          [36m>[39m
+            [0mPlan daily targets and balance the production line.[0m
+          [36m</p>[39m
+        [36m</div>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"p-2 md:p-6"[39m
+        [36m>[39m
+          [36m<div[39m
+            [33mclass[39m=[32m"flex flex-col gap-6 mb-6 p-2 md:p-0"[39m
+          [36m>[39m
+            [36m<div[39m
+              [33mclass[39m=[32m"flex flex-col md:flex-row gap-4 items-end"[39m
+            [36m>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mSelect Style[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"style-1"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mChoose a style...[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-1"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mStyle A[0m
+                      [0m [0m
+                      [36m<span[39m
+                        [33mclass[39m=[32m"text-muted-foreground ml-2"[39m
+                      [36m>[39m
+                        [0m([0m
+                        [0m10.00[0m
+                        [0m mins)[0m
+                      [36m</span>[39m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-2"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mStyle B[0m
+                      [0m [0m
+                      [36m<span[39m
+                        [33mclass[39m=[32m"text-muted-foreground ml-2"[39m
+                      [36m>[39m
+                        [0m([0m
+                        [0m15.00[0m
+                        [0m mins)[0m
+                      [36m</span>[39m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mNext Style (Continuous Flow)[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m""[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span>[39m
+                      [0mSelect Next Style (Optional)[0m
+                    [36m</span>[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"none"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mNone[0m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"style-2"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mStyle B[0m
+                      [0m ([0m
+                      [0m15.00[0m
+                      [0m mins)[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mPlanning Mode[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"select-root"[39m
+                  [33mdata-value[39m=[32m"capacity"[39m
+                [36m>[39m
+                  [36m<div[39m
+                    [33mrole[39m=[32m"combobox"[39m
+                  [36m>[39m
+                    [36m<span />[39m
+                  [36m</div>[39m
+                  [36m<div[39m
+                    [33mdata-testid[39m=[32m"select-content"[39m
+                  [36m>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"target"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mTarget Driven (Set Qty)[0m
+                    [36m</div>[39m
+                    [36m<div[39m
+                      [33mdata-value[39m=[32m"capacity"[39m
+                      [33mrole[39m=[32m"option"[39m
+                    [36m>[39m
+                      [0mCapacity Driven (Set Team Size)[0m
+                    [36m</div>[39m
+                  [36m</div>[39m
+                [36m</div>[39m
+              [36m</div>[39m
+              [36m<div[39m
+                [33mclass[39m=[32m"w-full md:w-1/3 space-y-2"[39m
+              [36m>[39m
+                [36m<label[39m
+                  [33mclass[39m=[32m"text-sm font-medium"[39m
+                [36m>[39m
+                  [0mAvailable Operators[0m
+                [36m</label>[39m
+                [36m<div[39m
+                  [33mdata-testid[39m=[32m"multi-select"[39m
+                [36m>[39m
+                  [36m<span[39m
+                    [33mdata-tes...
+[36m [2m❯[22m src/components/dashboard/production-planner.test.tsx:[2m447:36[22m[39m
+    [90m445| [39m            console[33m.[39m[34mlog[39m([32m'[DEBUG-PROPS-FULL]'[39m[33m,[39m dataProps)[33m;[39m
+    [90m446| [39m            [35mconst[39m props [33m=[39m [33mJSON[39m[33m.[39m[34mparse[39m(dataProps [33m||[39m [32m'{}'[39m)[33m;[39m
+    [90m447| [39m            [34mexpect[39m(props[33m.[39msegments)[33m.[39m[34mtoBeDefined[39m()[33m;[39m
+    [90m   | [39m                                   [31m^[39m
+    [90m448| [39m            [34mexpect[39m(props[33m.[39msegments[[32m'op-1'[39m])[33m.[39m[34mtoBeDefined[39m()[33m;[39m
+    [90m449| [39m            [34mexpect[39m(props[33m.[39msegments[[32m'op-1'[39m][33m.[39mlength)[33m.[39m[34mtoBeGreaterThan[39m([34m0[39m)[33m;[39m
+[90m [2m❯[22m runWithExpensiveErrorDiagnosticsDisabled node_modules/@testing-library/dom/dist/config.js:[2m47:12[22m[39m
+[90m [2m❯[22m checkCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m124:77[22m[39m
+[90m [2m❯[22m Timeout.checkRealTimersCallback node_modules/@testing-library/dom/dist/wait-for.js:[2m118:16[22m[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m10 passed[39m[22m[90m (11)[39m
+[2m   Start at [22m 13:07:50
+[2m   Duration [22m 4.05s[2m (transform 526ms, setup 0ms, import 1.16s, tests 1.76s, environment 387ms)[22m
+

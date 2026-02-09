@@ -39,6 +39,42 @@ export async function POST(request: Request) {
 
     await firestore.collection('production').add(newEntry);
 
+    // Update Daily Plan Segment if startTime is provided (or we duplicate logic to find it)
+    // We expect startTime in body now
+    const { startTime } = body;
+    if (typeof startTime === 'number') {
+      const todayStr = date.split('T')[0]; // simple YYYY-MM-DD extraction from ISO
+      const planRef = firestore.collection('daily_plans').doc(todayStr);
+
+      // Transaction or simple update? Simple update is risky for array but map structure is safer.
+      // schedules is a Map: operatorId -> ScheduleSegment[]
+      // We need to read the doc to find the index? Firestore doesn't support updating array element by query.
+      // We have to read, modify, write.
+
+      try {
+        await firestore.runTransaction(async (t) => {
+          const doc = await t.get(planRef);
+          if (!doc.exists) return;
+
+          const data = doc.data();
+          const schedules = data?.schedules || {};
+          const userSchedule = schedules[operatorId] || [];
+
+          // Find segment
+          const idx = userSchedule.findIndex((s: any) => s.start === startTime && s.opId === operationId);
+
+          if (idx !== -1) {
+            userSchedule[idx].completed = true;
+            schedules[operatorId] = userSchedule; // updating the array in the map
+            t.update(planRef, { schedules });
+          }
+        });
+      } catch (e) {
+        console.error("Failed to update schedule completion flag", e);
+        // Don't fail the whole request, logging is more important
+      }
+    }
+
     // Run both stat updates concurrently for efficiency
     await Promise.all([
       updateOperatorStats(operatorId, entryDate),

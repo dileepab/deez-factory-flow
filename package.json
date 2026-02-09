@@ -67,6 +67,7 @@
     "@types/react": "^19.2.1",
     "@types/react-dom": "^19.2.1",
     "@vitejs/plugin-react": "^5.1.2",
+    "@vitest/coverage-v8": "^4.0.18",
     "firebase-admin": "^12.6.0",
     "genkit-cli": "^1.20.0",
     "jsdom": "^27.4.0",
