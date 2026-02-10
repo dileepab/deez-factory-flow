@@ -1,0 +1,12 @@
+# Development App Hosting Configuration
+# More permissive settings for testing
+
+runConfig:
+  # Lower resource limits for development
+  maxInstances: 1
+  minInstances: 0
+  cpu: 1
+  memoryMiB: 512
+  
+  # Faster cold starts acceptable in dev
+  concurrency: 80

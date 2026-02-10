@@ -1,0 +1,8 @@
+{
+  "projects": {
+    "development": "deez-factory-dev",
+    "production": "studio-4207278931-f63d2"
+  },
+  "targets": {},
+  "etags": {}
+}

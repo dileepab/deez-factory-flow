@@ -1,0 +1,12 @@
+# Production App Hosting Configuration
+# Optimized for performance and reliability
+
+runConfig:
+  # Higher resource limits for production traffic
+  maxInstances: 5
+  minInstances: 1
+  cpu: 2
+  memoryMiB: 1024
+  
+  # Better performance under load
+  concurrency: 100
