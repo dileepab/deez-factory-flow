@@ -58,9 +58,12 @@ export function UserNav() {
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuGroup>
+              <Link href="/dashboard/profile" passHref>
+                <DropdownMenuItem>Profile</DropdownMenuItem>
+              </Link>
               {userData?.role === 'admin' && (
                 <Link href="/dashboard/settings" passHref>
-                    <DropdownMenuItem>Settings</DropdownMenuItem>
+                  <DropdownMenuItem>Settings</DropdownMenuItem>
                 </Link>
               )}
             </DropdownMenuGroup>

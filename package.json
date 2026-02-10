@@ -3,14 +3,20 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbopack -p 9002",
+    "dev": "cp .env.development .env.local && next dev -p 9002",
     "genkit:dev": "genkit start -- tsx src/ai/dev.ts",
     "genkit:watch": "genkit start -- tsx --watch src/ai/dev.ts",
-    "build": "NODE_ENV=production next build",
+    "build": "next build",
+    "build:dev": "cp .env.development .env.local && next build",
+    "build:prod": "cp .env.production .env.local && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "test": "vitest"
+    "test": "vitest",
+    "deploy:dev": "cp .env.development .env.local && firebase use development && firebase deploy --only hosting",
+    "deploy:prod": "cp .env.production .env.local && firebase use production && firebase deploy --only hosting",
+    "firestore:deploy:dev": "firebase use development && firebase deploy --only firestore:rules",
+    "firestore:deploy:prod": "firebase use production && firebase deploy --only firestore:rules"
   },
   "dependencies": {
     "@genkit-ai/google-genai": "^1.20.0",

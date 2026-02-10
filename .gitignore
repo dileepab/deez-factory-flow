@@ -7,6 +7,7 @@
 
 # Testing
 /coverage
+.firebase
 
 # Next.js build output
 /.next
@@ -24,6 +25,8 @@
 .env.development.local
 .env.test.local
 .env.production.local
+.env.development
+.env.production
 
 # Service Account Keys
 *-firebase-adminsdk-*.json
