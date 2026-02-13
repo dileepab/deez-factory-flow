@@ -21,9 +21,10 @@ interface DailyTimelineProps {
     availableMinutes: number;
     schedule?: Record<string, { start: number, end: number, opId: string, count: number, completed?: boolean }[]>;
     productionLogs?: ProductionEntry[]; // Optional logs
+    switchDelay?: number;
 }
 
-export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule, productionLogs = [] }: DailyTimelineProps) {
+export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule, productionLogs = [], switchDelay = 0 }: DailyTimelineProps) {
     const { user } = useAuth();
     // State for Mobile Tooltips
     const [openTooltipId, setOpenTooltipId] = useState<string | null>(null);
@@ -55,7 +56,11 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
 
     // SHIFT CONFIGURATION
     const SHIFT_START_HOUR = 7.5; // 7:30 AM
-    const TOTAL_SHIFT_MINUTES = 540; // 9 Hours fixed
+    // Dynamic Shift Duration: Base 540 (9h) but expand if availableMinutes (work time) + Breaks > 540
+    // Standard: 480 work + 60 break = 540.
+    // OT: 480 + 120 OT = 600 work. Total = 600 + 60 break = 660.
+    const BREAK_DURATION = 60;
+    const TOTAL_SHIFT_MINUTES = Math.max(540, availableMinutes + BREAK_DURATION);
 
     const BREAKS = [
         { name: "Tea", start: 165, end: 180 }, // 10:15 - 10:30 (165m from 7:30)
@@ -398,7 +403,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                     <div className="hidden md:block w-[120px] pr-4 shrink-0" />
                                     <div className="flex-1 relative h-6 text-xs text-muted-foreground border-b border-gray-200">
                                         <div className="absolute top-0 h-full border-l pl-1 border-gray-300" style={{ left: '0%' }}>7:30</div>
-                                        {Array.from({ length: 9 }).map((_, i) => {
+                                        {Array.from({ length: Math.ceil(TOTAL_SHIFT_MINUTES / 60) }).map((_, i) => {
                                             const tickTime = 30 + (i * 60);
                                             if (tickTime >= TOTAL_SHIFT_MINUTES) return null;
                                             return (
@@ -411,7 +416,9 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                 </div>
                                             )
                                         })}
-                                        <div className="absolute top-0 h-full border-l pl-1 border-gray-300" style={{ left: '100%' }}>4:30</div>
+                                        <div className="absolute top-0 h-full border-l pl-1 border-gray-300" style={{ left: '100%' }}>
+                                            {formatTime(TOTAL_SHIFT_MINUTES)}
+                                        </div>
                                     </div>
                                 </div>
 
@@ -461,6 +468,43 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                             }
                                             cursor = Math.max(cursor, ev.end);
                                         });
+
+                                        // 1.5 Insert Switch Blocks
+                                        for (let i = 0; i < mergedEvents.length - 1; i++) {
+                                            const current = mergedEvents[i];
+                                            const next = mergedEvents[i + 1];
+                                            const gap = next.start - current.end;
+
+                                            if (gap >= (switchDelay || 0) && gap > 0) {
+                                                const currOp = getOpDetails(current.opId).op;
+                                                const nextOp = getOpDetails(next.opId).op;
+
+                                                // Only show switch block if machine type differs (or if there's a significant gap explicitly from sim)
+                                                // Sim engine adds switchDelay ONLY for different machine types usually.
+                                                if (currOp && nextOp && currOp.machineType !== nextOp.machineType) {
+                                                    // Map start/end to Wall Time
+                                                    // The switch happens immediately after current task ends
+                                                    const switchStart = current.end;
+                                                    const switchEnd = current.end + (switchDelay || 0);
+
+                                                    // Allow for splitting if switch crosses a break? 
+                                                    // Ideally yes.
+                                                    const parts = splitSegment(switchStart, switchEnd);
+                                                    parts.forEach(part => {
+                                                        const wallStart = mapWorkStart(part.start);
+                                                        const wallEnd = mapWorkEnd(part.end);
+                                                        segments.push({
+                                                            color: '#94a3b8', // Slate 400
+                                                            name: 'Switch',
+                                                            count: 0,
+                                                            start: wallStart,
+                                                            end: wallEnd,
+                                                            isGap: true
+                                                        });
+                                                    });
+                                                }
+                                            }
+                                        }
 
                                         BREAKS.forEach(b => {
                                             segments.push({ color: '#cbd5e1', name: b.name, count: 1, start: b.start, end: b.end, isGap: false });

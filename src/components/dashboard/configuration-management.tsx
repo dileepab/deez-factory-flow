@@ -139,6 +139,16 @@ export function ConfigurationManagement() {
             <Label htmlFor="targetSalaryLKR">Target Salary (LKR)</Label>
             <Input id="targetSalaryLKR" type="number" value={formData.targetSalaryLKR || ''} onChange={handleInputChange} />
           </div>
+          <div className="space-y-2">
+            <Label htmlFor="defaultSwitchDelay">Default Switch Delay (mins)</Label>
+            <Input
+              id="defaultSwitchDelay"
+              type="number"
+              value={formData.defaultSwitchDelay || ''}
+              onChange={handleInputChange}
+              placeholder="Default: 2"
+            />
+          </div>
         </div>
         <div className="space-y-3">
           <Label>Holidays</Label>
@@ -196,6 +206,10 @@ export function ConfigurationManagement() {
             <p className="text-xs text-muted-foreground">Select a date from the calendar to add it as a holiday. Click 'x' to remove.</p>
           </div>
         </div>
+
+        {/* Machine Management Section */}
+        <MachineManagementSection formData={formData} setFormData={setFormData} />
+
       </CardContent>
       <CardFooter className="flex justify-between items-center">
         <div className="text-sm space-x-2">
@@ -208,5 +222,105 @@ export function ConfigurationManagement() {
         </Button>
       </CardFooter>
     </Card>
+  );
+}
+
+function MachineManagementSection({ formData, setFormData }: { formData: Partial<Configuration>, setFormData: React.Dispatch<React.SetStateAction<Partial<Configuration>>> }) {
+  const [newMachineName, setNewMachineName] = useState("");
+  // Lazy load constant to avoid circular dependency issues if any, though importing is fine
+  const STANDARD_TYPES = [
+    'Single Needle Lockstitch',
+    'Double Needle Lockstitch',
+    'Overlock/Serger',
+    'Flatlock/Coverstitch',
+    'Buttonhole Machine',
+    'Button Attach Machine',
+    'Waist Band (Kansai)',
+    'Piping Attach with Single Needle',
+  ];
+
+  const allTypes = Array.from(new Set([...STANDARD_TYPES, ...(formData.customMachineTypes || [])]));
+
+  const handleAddMachine = () => {
+    if (!newMachineName.trim()) return;
+    const current = formData.customMachineTypes || [];
+    if (!current.includes(newMachineName.trim()) && !STANDARD_TYPES.includes(newMachineName.trim())) {
+      setFormData(prev => ({
+        ...prev,
+        customMachineTypes: [...current, newMachineName.trim()]
+      }));
+    }
+    setNewMachineName("");
+  };
+
+  const handleRemoveMachine = (name: string) => {
+    setFormData(prev => ({
+      ...prev,
+      customMachineTypes: (prev.customMachineTypes || []).filter(t => t !== name)
+    }));
+  };
+
+  const handleCountChange = (name: string, count: number) => {
+    setFormData(prev => ({
+      ...prev,
+      machineCounts: { ...prev.machineCounts, [name]: count }
+    }));
+  };
+
+  return (
+    <div className="space-y-4 pt-6 border-t">
+      <div className="flex items-center justify-between">
+        <div className="space-y-1">
+          <h3 className="text-lg font-medium">Machine Inventory</h3>
+          <p className="text-sm text-muted-foreground">Manage available machines and their quantities.</p>
+        </div>
+      </div>
+
+      <div className="flex gap-2 items-end">
+        <div className="space-y-2 flex-1">
+          <Label>Add New Machine Type</Label>
+          <Input
+            value={newMachineName}
+            onChange={(e) => setNewMachineName(e.target.value)}
+            placeholder="e.g. Special Hemmer"
+          />
+        </div>
+        <Button onClick={handleAddMachine} variant="secondary">Add</Button>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mt-4">
+        {allTypes.map(type => {
+          const isCustom = !STANDARD_TYPES.includes(type);
+          const count = formData.machineCounts?.[type] ?? 5; // Default 5
+
+          return (
+            <div key={type} className="flex items-center gap-2 p-3 border rounded-md bg-card">
+              <div className="flex-1 overflow-hidden">
+                <div className="flex items-center gap-2">
+                  <span className="font-medium text-sm truncate" title={type}>{type}</span>
+                  {isCustom && <Badge variant="secondary" className="text-[10px] h-5 px-1">Custom</Badge>}
+                </div>
+              </div>
+              <Input
+                type="number"
+                className="w-20 h-8 text-right"
+                value={count}
+                onChange={(e) => handleCountChange(type, parseInt(e.target.value) || 0)}
+              />
+              {isCustom && (
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                  onClick={() => handleRemoveMachine(type)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

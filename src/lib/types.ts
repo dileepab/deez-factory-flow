@@ -18,6 +18,9 @@ export interface Configuration {
     attendanceBonusLKR: number;
     minuteValueLKR: number;
     holidays: string[]; // Array of dates in 'YYYY-MM-DD' format
+    defaultSwitchDelay?: number; // Default delay in minutes when switching tasks/machines
+    machineCounts?: Record<string, number>; // Inventory count per machine type
+    customMachineTypes?: string[]; // User-defined machine types
 }
 
 
@@ -36,7 +39,7 @@ export interface User {
     totalOperations?: number; // For operators: Today's total completed operations
     rework?: number; // For operators: Today's rework count
     equivalentGarments?: number; // For operators: Today's equivalent garments produced
-    skills?: MachineType[number][]; // Array of machine types the operator is skilled in
+    skills?: string[]; // Array of machine types the operator is skilled in
     efficiencyRating?: number; // Manual rating (default 100)
     monthlyStats?: {
         [key: string]: {
@@ -70,7 +73,7 @@ export interface GarmentOperation {
     id: string;
     name: string
     smv: number; // Standard Minute Value
-    machineType: MachineType[number]; // Corrected Type: A single value from the MachineType array
+    machineType: string; // Dynamic machine type string
     dependencies: string[];
     completedQuantity: number;
 }
