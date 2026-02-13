@@ -14,15 +14,24 @@ export const simulateProductionSchedule = (
     availableMinutes: number,
     switchDelay: number = 5,
     nextStyle?: GarmentStyle,
-    nextAssignments?: Assignment[]
+    nextAssignments?: Assignment[],
+    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {}
 ) => {
     // 1. Setup Logging & Output
     const logs: string[] = [];
     const log = (msg: string) => { if (logs.length < 500) logs.push(msg); };
     log(`SIM START. Machines=${JSON.stringify(machineCounts)}. Delay=${switchDelay}`);
 
+    // Determine Logic Simulation Duration (Base + Max OT)
+    let maxSimulationTicks = availableMinutes;
+    Object.values(operatorAttendance).forEach(att => {
+        const userEnd = availableMinutes + (att.shiftExtension || 0);
+        if (userEnd > maxSimulationTicks) maxSimulationTicks = userEnd;
+    });
+
     // Track Last Machine for Delay Logic
     const operatorLastMachine = new Map<string, string>();
+    const operatorLastOpId = new Map<string, string>();
 
     // 1.1 Redundant Dependency Removal (Transitive Reduction)
     const effectiveDependencies = new Map<string, string[]>();
@@ -70,7 +79,9 @@ export const simulateProductionSchedule = (
 
     // 1.2 Calculate Ideal Weights (Target Ratios)
     const assignArr = assignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
-    const solvedWeights = solveFluidCapacity(style, assignArr, operators, machineCounts, availableMinutes);
+
+    // Pass attendance to solver
+    const solvedWeights = solveFluidCapacity(style, assignArr, operators, machineCounts, availableMinutes, operatorAttendance);
 
     const targetRatios = new Map<string, Map<string, number>>();
     operators.forEach(u => targetRatios.set(u.id, new Map()));
@@ -173,7 +184,7 @@ export const simulateProductionSchedule = (
         });
 
         const nextAssignArr = nextAssignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
-        const nextSolvedWeights = solveFluidCapacity(nextStyle, nextAssignArr, operators, machineCounts, availableMinutes);
+        const nextSolvedWeights = solveFluidCapacity(nextStyle, nextAssignArr, operators, machineCounts, availableMinutes, operatorAttendance);
         operators.forEach(u => nextTargetRatios.set(u.id, new Map()));
         nextSolvedWeights.forEach((res, opId) => {
             if (res.finalWeights) {
@@ -203,8 +214,8 @@ export const simulateProductionSchedule = (
     const machineUsage = new Map<string, number>();
     const opState = new Map<string, { busyUntil: number, opId: string, startTick: number, count: number, isNextStyle?: boolean }>();
 
-    // 3. Simulation Loop
-    for (let t = 0; t < availableMinutes; t++) {
+    // 3. Simulation Loop - Run until Max Ticks
+    for (let t = 0; t < maxSimulationTicks; t++) {
 
         // A. Release Resources
         const finishedIds: string[] = [];
@@ -256,6 +267,14 @@ export const simulateProductionSchedule = (
         // B. Assign Idle Operators
         operators.forEach(user => {
             if (opState.has(user.id)) return;
+
+            // ATTENDANCE & SHIFT CHECK
+            const att = operatorAttendance[user.id] || { startDelay: 0, shiftExtension: 0 };
+            const startCheck = att.startDelay || 0;
+            const endCheck = availableMinutes + (att.shiftExtension || 0);
+
+            // Too early (late start) OR Too late (shift ended)
+            if (t < startCheck || t >= endCheck) return;
 
             const tryAssign = (
                 currentStyle: GarmentStyle,
@@ -312,7 +331,23 @@ export const simulateProductionSchedule = (
 
                     const aRatio = getComplianceScore(a);
                     const bRatio = getComplianceScore(b);
-                    if (Math.abs(aRatio - bRatio) > 0.1) return aRatio - bRatio;
+
+                    // Stickiness Bias: Prefer the same operation to avoid switch delay
+                    // Effectively "discount" the ratio of the current op to make it more attractive
+                    const lastOpId = operatorLastOpId.get(user.id);
+                    const STICKINESS_BIAS = 0.15; // Prefer current task unless other is >15% more urgent
+
+                    let effA = aRatio;
+                    let effB = bRatio;
+
+                    if (lastOpId) {
+                        if (a.id === lastOpId) effA -= STICKINESS_BIAS;
+                        if (b.id === lastOpId) effB -= STICKINESS_BIAS;
+                    }
+
+                    // Use effective ratios for comparison
+                    if (Math.abs(effA - effB) > 0.1) return effA - effB;
+
                     return currentStyle.operations.indexOf(a) - currentStyle.operations.indexOf(b);
                 });
 
@@ -333,8 +368,8 @@ export const simulateProductionSchedule = (
                     if (maxInput > leftToMake) maxInput = leftToMake;
                     if (maxInput <= 0 && deps.length > 0) continue;
 
-                    const MIN_BATCH = 10;
-                    const isEndOfShift = (availableMinutes - t) < 60;
+                    const MIN_BATCH = 5; // Reduced from 10 to allow flow
+                    const isEndOfShift = (endCheck - t) < 60; // Use individual endCheck
                     if (maxInput < MIN_BATCH && !isEndOfShift && deps.length) continue;
 
                     const efficiency = (user.efficiencyRating || 100) / 100;
@@ -345,14 +380,20 @@ export const simulateProductionSchedule = (
                     const targetPcs = Math.max(10, Math.min(100, rawTarget));
                     const actualPcs = Math.min(maxInput, targetPcs);
 
-                    // NEW: Determine Switch Delay
+                    // Determine Switch Delay
                     const lastType = operatorLastMachine.get(user.id);
+                    const lastOpId = operatorLastOpId.get(user.id);
                     let delay = 0;
-                    if (lastType && lastType !== mType) {
+
+                    // Apply delay if Machine Type changes OR Operation changes
+                    if (lastType && (lastType !== mType || (lastOpId && lastOpId !== op.id))) {
                         delay = switchDelay;
                     }
 
                     const duration = (actualPcs * minutesPerPc) + delay;
+
+                    // Ensure task does not exceed operator's shift end (soft stop, or hard stop?)
+                    // For now, allow finishing the task if started.
 
                     opState.set(user.id, {
                         busyUntil: t + duration,
@@ -363,6 +404,8 @@ export const simulateProductionSchedule = (
                     });
 
                     machineUsage.set(mType, mUsed + 1);
+                    operatorLastMachine.set(user.id, mType);
+                    operatorLastOpId.set(user.id, op.id);
 
                     if (deps.length > 0) {
                         deps.forEach(d => {
@@ -393,7 +436,7 @@ export const simulateProductionSchedule = (
         });
     }
 
-    log(`SIM COMPLETE. Processed ${availableMinutes} ticks.`);
+    log(`SIM COMPLETE. Processed ${maxSimulationTicks} ticks.`);
     return { schedule, logs };
 };
 
@@ -404,7 +447,8 @@ export const solveFluidCapacity = (
     assignments: { operationId: string, operatorIds: string[] }[],
     operators: Operator[],
     machineCounts: Record<string, number>,
-    availableMinutes: number
+    availableMinutes: number,
+    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {}
 ) => {
     // 1. Initialize Weights (Proportional to SMV)
     // Map<OperatorId, Map<OpId, number>> (0.0 to 1.0)
@@ -419,9 +463,38 @@ export const solveFluidCapacity = (
     });
 
     // Normalize initial weights to sum to 1.0 for each operator
-    opWeights.forEach((weights) => {
+    // AND adjust for total capacity contribution
+    opWeights.forEach((weights, uid) => {
         const total = Array.from(weights.values()).reduce((a, b) => a + b, 0);
         weights.forEach((v, k) => weights.set(k, total > 0 ? v / total : 0));
+    });
+
+    // 2. Iterative Balancing (Fluid Dynamics)
+    // We need to balance load based on ACTUAL available minutes.
+    // The current logic balances based on 'hCap' which includes minutes, but the *distribution* 
+    // of work (weights) is currently just SMV based.
+    // If Bob has 2x time, he should get more work if he is shared on an operation.
+
+    // For shared operations, adjust weights based on available capacity
+    const opCapacity = new Map<string, number>();
+    operators.forEach(o => {
+        const att = operatorAttendance[o.id] || { startDelay: 0, shiftExtension: 0 };
+        opCapacity.set(o.id, Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0)));
+    });
+
+    // Re-distribute shared weights
+    assignments.forEach(a => {
+        if (a.operatorIds.length > 1) {
+            const totalCap = a.operatorIds.reduce((sum, uid) => sum + (opCapacity.get(uid) || 0), 0);
+            if (totalCap > 0) {
+                a.operatorIds.forEach(uid => {
+                    const share = (opCapacity.get(uid) || 0) / totalCap;
+                    // This is a simplification. Real balancing happens in loop. 
+                    // But initial weights should reflect capacity.
+                    // opWeights.get(uid)?.set(a.operationId, ...);
+                });
+            }
+        }
     });
 
     // 2. Iterative Balancing (Fluid Dynamics)
@@ -439,10 +512,16 @@ export const solveFluidCapacity = (
             assigned?.operatorIds.forEach(uid => {
                 const user = operators.find(o => o.id === uid);
                 const weight = opWeights.get(uid)?.get(op.id) || 0;
+
+                // Calculate effective available minutes for this user
+                const att = operatorAttendance[user?.id || ""] || { startDelay: 0, shiftExtension: 0 };
+                const userMinutes = Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0));
+
                 if (user && weight > 0) {
                     // Mins contributed = Avail * Weight
                     // Pcs = Mins / (OpSMV / 60)
-                    hCap += ((user.efficiencyRating || 100) / 100 * availableMinutes * weight) / (op.smv / 60);
+                    // console.log(`User ${user.name} Minutes: ${userMinutes}. Weight: ${weight}`);
+                    hCap += ((user.efficiencyRating || 100) / 100 * userMinutes * weight) / (op.smv / 60);
                 }
             });
 
@@ -510,7 +589,11 @@ export const solveFluidCapacity = (
                 assignedOps.push(user);
                 const weight = opWeights.get(uid)?.get(op.id) || 0;
                 finalWeights.set(uid, weight);
-                hCap += ((user.efficiencyRating || 100) / 100 * availableMinutes * weight) / (op.smv / 60);
+
+                const att = operatorAttendance[user.id] || { startDelay: 0, shiftExtension: 0 };
+                const userMinutes = Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0));
+
+                hCap += ((user.efficiencyRating || 100) / 100 * userMinutes * weight) / (op.smv / 60);
             }
         });
 

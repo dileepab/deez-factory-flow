@@ -32,6 +32,7 @@ import { collection, query, where } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
 import type { GarmentStyle, Operator, AnyUser, Assignment } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
+import { useMachineTypes } from '@/hooks/use-machine-types';
 import { Loader2, UserPlus, X, CheckCircle2, AlertCircle, Wand2, ClipboardList, RefreshCcw } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
@@ -108,18 +109,27 @@ export function ProductionPlanner(): React.ReactNode {
     const { user } = useAuth();
     const { toast } = useToast();
     const { data: config } = useConfiguration();
+    const { machineCounts: globalMachineCounts } = useMachineTypes();
     const [selectedStyleId, setSelectedStyleId] = useState<string>("");
     const [selectedNextStyleId, setSelectedNextStyleId] = useState<string>(""); // NEW: Next Style
     const [dailyTarget, setDailyTarget] = useState<number>(500);
     const [switchDelay, setSwitchDelay] = useState<number>(2); // Configurable Switch Delay (mins)
+
+    // Initialize Switch Delay from Config
+    useEffect(() => {
+        if (config?.defaultSwitchDelay !== undefined) {
+            setSwitchDelay(config.defaultSwitchDelay);
+        }
+    }, [config?.defaultSwitchDelay]);
+
     const [isPublishing, setIsPublishing] = useState(false);
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
     const [availableOperatorIds, setAvailableOperatorIds] = useState<string[]>([]);
     const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
-
-
+    const [operatorAttendance, setOperatorAttendance] = useState<Record<string, { startDelay: number, shiftExtension: number }>>({});
+    const [shiftStartTime, setShiftStartTime] = useState<string>("07:30");
 
     // Queries
     const stylesQuery = useMemoFirebase(
@@ -156,11 +166,37 @@ export function ProductionPlanner(): React.ReactNode {
         if (types.size > 0) {
             setMachineCounts(prev => {
                 const next = { ...prev };
-                types.forEach(t => { if (!next[t]) next[t] = 5; });
+                types.forEach(t => {
+                    // Always try to use global count first, defaulting to 5
+                    // We only want to keep 'prev' if it was explicitly user-set in this session, 
+                    // but we don't track that easily. 
+                    // Better approach: Sync with global settings unless we want to support temporary overrides?
+                    // User expectation is "Settings -> Planner". 
+                    // So we should update 'next[t]' to global count if the global count exists or if it's a new entry.
+                    // However, if the user manually changed it in the Planner UI *before* we simulate, do we want to overwrite?
+                    // Given the bug, let's prioritize Global Settings.
+
+                    // Logic: If 'globalMachineCounts' has a value, use it. Else use 5.
+                    // What if the user wants to override temporarily? 
+                    // The UI for "Machine Inventory (Constraints)" uses 'machineCounts' state.
+                    // If we overwrite it here on every render where style/global changes, it might be annoying if they are typing.
+                    // But this effect only runs on [selectedStyle, selectedNextStyle, globalMachineCounts].
+                    // So it should be safe to sync.
+
+                    // Actually, 'globalMachineCounts' needs to be in dependency array for this to auto-update.
+                    // I'll add it.
+
+                    const globalCount = globalMachineCounts?.[t];
+                    if (globalCount !== undefined) {
+                        next[t] = globalCount;
+                    } else if (next[t] === undefined) {
+                        next[t] = 5;
+                    }
+                });
                 return next;
             });
         }
-    }, [selectedStyle?.id, selectedNextStyle?.id]);
+    }, [selectedStyle?.id, selectedNextStyle?.id, globalMachineCounts]);
     const availableMinutes = config?.availableMinutesPerDay || 480;
 
     // Init availableOperatorIds
@@ -757,12 +793,11 @@ export function ProductionPlanner(): React.ReactNode {
     const flowMetrics = useMemo(() => calculateMetrics(selectedStyle, assignments), [selectedStyle, assignments, machineCounts, dailyTarget, availableMinutes, operators]);
     const nextFlowMetrics = useMemo(() => calculateMetrics(selectedNextStyle, nextAssignments), [selectedNextStyle, nextAssignments, machineCounts, dailyTarget, availableMinutes, operators]);
 
-    // Global bottleneck is the minimum effective output (considering flow)
     // Simulate Schedule for Visualization
     const simResult = useMemo(() => {
         if (!selectedStyle || assignments.length === 0) return { schedule: {}, logs: [] };
-        return simulateProductionSchedule(selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments);
-    }, [selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments]);
+        return simulateProductionSchedule(selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments, operatorAttendance);
+    }, [selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments, operatorAttendance]);
 
     // Global bottleneck: "Actual Output" derived from Simulation (Final Good Count)
     const bottleneckOutput = useMemo(() => {
@@ -1066,9 +1101,180 @@ export function ProductionPlanner(): React.ReactNode {
                             </div>
                         </div>
                     )}
-                    <div className="flex items-end mb-1">
-                        <Button onClick={handleAutoAssign} disabled={!selectedStyle} variant="secondary">
-                            <Wand2 className="mr-2 h-4 w-4" /> Auto Assign
+                    <div className="flex items-end gap-2">
+                        <Popover>
+                            <PopoverTrigger asChild>
+                                <Button variant="outline" className="border-dashed">
+                                    <CalendarClock className="mr-2 h-4 w-4" />
+                                    Manage Attendance
+                                    {Object.keys(operatorAttendance).length > 0 && (
+                                        <Badge variant="secondary" className="ml-2">
+                                            {Object.keys(operatorAttendance).length}
+                                        </Badge>
+                                    )}
+                                </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-96 p-4" align="start">
+                                <div className="space-y-4">
+                                    <div className="flex items-center justify-between">
+                                        <h4 className="font-medium leading-none">Attendance & Overtime</h4>
+                                    </div>
+
+                                    <div className="flex items-center justify-between gap-4 p-2 bg-muted/50 rounded-md">
+                                        <div className="flex flex-col gap-1.5">
+                                            <label className="text-sm font-medium whitespace-nowrap">Shift Start:</label>
+                                            <Input
+                                                type="time"
+                                                className="h-8 w-32"
+                                                value={shiftStartTime}
+                                                onChange={(e) => {
+                                                    setShiftStartTime(e.target.value);
+                                                }}
+                                            />
+                                        </div>
+                                        <div className="flex flex-col gap-1.5">
+                                            <label className="text-sm font-medium whitespace-nowrap">Global OT (Hrs):</label>
+                                            <Input
+                                                type="number"
+                                                className="h-8 w-24 text-right"
+                                                placeholder="0"
+                                                min="0"
+                                                step="0.5"
+                                                onChange={(e) => {
+                                                    const val = parseFloat(e.target.value) || 0;
+                                                    setOperatorAttendance(prev => {
+                                                        const next = { ...prev };
+                                                        // Update all visible operators
+                                                        operators.filter(o => availableOperatorIds.includes(o.id)).forEach(op => {
+                                                            const current = next[op.id] || { startDelay: 0, shiftExtension: 0 };
+                                                            next[op.id] = { ...current, shiftExtension: val * 60 };
+                                                            if (next[op.id].startDelay === 0 && next[op.id].shiftExtension === 0) delete next[op.id];
+                                                        });
+                                                        return next;
+                                                    });
+                                                }}
+                                            />
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground">
+                                        Standard Shift: {Math.floor(availableMinutes / 60)}h {(availableMinutes % 60)}m
+                                    </p>
+
+                                    <div className="grid gap-2 max-h-[300px] overflow-y-auto pr-2">
+                                        <div className="grid grid-cols-[1fr,60px,60px,60px] gap-2 text-xs font-medium text-muted-foreground mb-1">
+                                            <span>Operator</span>
+                                            <span className="text-center">Start</span>
+                                            <span className="text-center">End</span>
+                                            <span className="text-right">OT/Early</span>
+                                        </div>
+                                        {operators.filter(o => availableOperatorIds.includes(o.id)).map(op => {
+                                            const att = operatorAttendance[op.id] || { startDelay: 0, shiftExtension: 0 };
+
+                                            // Helper to convert delay to time string
+                                            const getStartTime = () => {
+                                                const [h, m] = shiftStartTime.split(':').map(Number);
+                                                const totalMins = (h * 60) + m + att.startDelay;
+                                                const newH = Math.floor(totalMins / 60);
+                                                const newM = totalMins % 60;
+                                                return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+                                            };
+
+                                            // Helper to calc delay from time string
+                                            const updateStartTime = (timeStr: string) => {
+                                                const [globalH, globalM] = shiftStartTime.split(':').map(Number);
+                                                const globalMins = (globalH * 60) + globalM;
+
+                                                const [inH, inM] = timeStr.split(':').map(Number);
+                                                const inMins = (inH * 60) + inM;
+
+                                                const diff = Math.max(0, inMins - globalMins);
+
+                                                setOperatorAttendance(prev => {
+                                                    const next = { ...prev };
+                                                    const current = next[op.id] || { startDelay: 0, shiftExtension: 0 };
+                                                    next[op.id] = { ...current, startDelay: diff };
+
+                                                    // Cleanup if clean
+                                                    if (next[op.id].startDelay === 0 && next[op.id].shiftExtension === 0) delete next[op.id];
+                                                    return next;
+                                                });
+                                            };
+
+                                            // Helper to get End Time
+                                            const getEndTime = () => {
+                                                const [h, m] = shiftStartTime.split(':').map(Number);
+                                                const startMins = (h * 60) + m;
+                                                const BREAK_MINUTES = 60; // 2x15m Tea + 30m Lunch
+                                                const standardEnd = startMins + availableMinutes + BREAK_MINUTES;
+                                                const actualEnd = standardEnd + att.shiftExtension;
+
+                                                const newH = Math.floor(actualEnd / 60) % 24;
+                                                const newM = actualEnd % 60;
+                                                return `${String(newH).padStart(2, '0')}:${String(newM).padStart(2, '0')}`;
+                                            };
+
+                                            // Helper to update End Time
+                                            const updateEndTime = (timeStr: string) => {
+                                                const [globalH, globalM] = shiftStartTime.split(':').map(Number);
+                                                const startMins = (globalH * 60) + globalM;
+                                                const BREAK_MINUTES = 60; // 2x15m Tea + 30m Lunch
+                                                const standardEnd = startMins + availableMinutes + BREAK_MINUTES;
+
+                                                const [inH, inM] = timeStr.split(':').map(Number);
+                                                const inMins = (inH * 60) + inM;
+
+                                                // Calculate difference from standard end
+                                                // If inMins < standardEnd, it's negative (early leave)
+                                                // If inMins > standardEnd, it's positive (OT)
+                                                const diff = inMins - standardEnd;
+
+                                                setOperatorAttendance(prev => {
+                                                    const next = { ...prev };
+                                                    const current = next[op.id] || { startDelay: 0, shiftExtension: 0 };
+                                                    next[op.id] = { ...current, shiftExtension: diff };
+
+                                                    if (next[op.id].startDelay === 0 && next[op.id].shiftExtension === 0) delete next[op.id];
+                                                    return next;
+                                                });
+                                            };
+
+                                            return (
+                                                <div key={op.id} className="grid grid-cols-[1fr,60px,60px,60px] gap-2 items-center">
+                                                    <span className="text-sm truncate" title={op.name}>{op.name}</span>
+                                                    <Input
+                                                        type="time"
+                                                        className="h-7 p-1 text-center text-[10px]"
+                                                        value={getStartTime()}
+                                                        onChange={(e) => updateStartTime(e.target.value)}
+                                                    />
+                                                    <Input
+                                                        type="time"
+                                                        className="h-7 p-1 text-center text-[10px]"
+                                                        value={getEndTime()}
+                                                        onChange={(e) => updateEndTime(e.target.value)}
+                                                    />
+                                                    <div className={`text-[10px] text-right font-mono ${att.shiftExtension > 0 ? 'text-green-600 font-bold' : att.shiftExtension < 0 ? 'text-red-500 font-bold' : 'text-muted-foreground'}`}>
+                                                        {att.shiftExtension > 0 ? '+' : ''}{Math.round(att.shiftExtension / 60 * 10) / 10}h
+                                                    </div>
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                    <Button
+                                        variant="ghost"
+                                        size="sm"
+                                        className="w-full text-muted-foreground"
+                                        onClick={() => setOperatorAttendance({})}
+                                    >
+                                        Clear All
+                                    </Button>
+                                </div>
+                            </PopoverContent>
+                        </Popover>
+
+                        <Button onClick={handleAutoAssign} disabled={!selectedStyle}>
+                            <Wand2 className="mr-2 h-4 w-4" />
+                            Auto Assign
                         </Button>
                     </div>
 
@@ -1304,37 +1510,46 @@ export function ProductionPlanner(): React.ReactNode {
                 )}
 
                 {/* Visual Timeline */}
-                {/* Visual Timeline */}
                 {selectedStyle && (assignments.length > 0 || nextAssignments.length > 0) && (
-                    <div className="flex items-center justify-between mb-4 mt-8">
-                        <h3 className="text-lg font-semibold flex items-center gap-2">
-                            <CalendarClock className="h-5 w-5" />
-                            Visual Timeline
-                        </h3>
-                        <Button
-                            onClick={handlePublishSchedule}
-                            disabled={isPublishing || !simResult.schedule}
-                            className="bg-green-600 hover:bg-green-700 text-white"
-                        >
-                            {isPublishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
-                            Publish Plan
-                        </Button>
-                    </div>
-                )}
-                {selectedStyle && (assignments.length > 0 || nextAssignments.length > 0) && (
-                    <DailyTimeline
-                        assignedOperators={
-                            unique([...assignments, ...nextAssignments].flatMap(a => a.operatorIds))
-                                .map(id => operators.find(o => o.id === id)!)
-                                .filter(Boolean)
-                        }
-                        assignments={[...assignments, ...nextAssignments]}
-                        selectedStyle={selectedStyle}
-                        selectedNextStyle={selectedNextStyle}
-                        flowMetrics={flowMetrics}
-                        availableMinutes={availableMinutes}
-                        schedule={simResult.schedule}
-                    />
+                    <>
+                        <div className="flex items-center justify-between mb-4 mt-8">
+                            <h3 className="text-lg font-semibold flex items-center gap-2">
+                                <CalendarClock className="h-5 w-5" />
+                                Visual Timeline
+                            </h3>
+                            <Button
+                                onClick={handlePublishSchedule}
+                                disabled={isPublishing || !simResult.schedule}
+                                className="bg-green-600 hover:bg-green-700 text-white"
+                            >
+                                {isPublishing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}
+                                Publish Plan
+                            </Button>
+                        </div>
+                        {/* Placeholder until logs are fetched or passed in */}
+                        {(() => {
+                            const productionLogs: any[] = [];
+                            return (
+                                <DailyTimeline
+                                    assignedOperators={
+                                        unique([...assignments, ...nextAssignments].flatMap(a => a.operatorIds))
+                                            .map(id => operators.find(o => o.id === id)!)
+                                            .filter(Boolean)
+                                    }
+                                    assignments={[...assignments, ...nextAssignments]}
+                                    selectedStyle={selectedStyle}
+                                    selectedNextStyle={selectedNextStyle}
+                                    flowMetrics={flowMetrics}
+                                    availableMinutes={availableMinutes + (
+                                        Object.values(operatorAttendance).reduce((max, curr) => Math.max(max, curr.shiftExtension || 0), 0)
+                                    )}
+                                    schedule={simResult.schedule}
+                                    productionLogs={productionLogs}
+                                    switchDelay={switchDelay}
+                                />
+                            );
+                        })()}
+                    </>
                 )}
             </CardContent>
         </Card>

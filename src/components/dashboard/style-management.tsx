@@ -7,6 +7,7 @@ import { firestore } from '@/firebase/client';
 import { collection, query, where, doc, addDoc, updateDoc, deleteDoc, writeBatch, getDoc, getDocs } from 'firebase/firestore';
 import type { GarmentStyle, GarmentOperation, MachineType } from '@/lib/types';
 import { MACHINE_TYPES } from '@/lib/constants';
+import { useMachineTypes } from '@/hooks/use-machine-types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -28,6 +29,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 
 export function StyleManagement() {
     const { toast } = useToast();
+    const { allTypes } = useMachineTypes();
     const { data: config, isLoading: isConfigLoading } = useConfiguration();
     const [statusFilter, setStatusFilter] = useState<'active' | 'completed'>('active');
 
@@ -44,7 +46,7 @@ export function StyleManagement() {
     const [newStyleQuantity, setNewStyleQuantity] = useState<number>(0);
     const [newOperationName, setNewOperationName] = useState("");
     const [newOperationTime, setNewOperationTime] = useState<number>(0);
-    const [newMachineType, setNewMachineType] = useState<MachineType[number]>(MACHINE_TYPES[0]);
+    const [newMachineType, setNewMachineType] = useState<string>(MACHINE_TYPES[0]);
     const [newOpDependencies, setNewOpDependencies] = useState<string[]>([]);
 
     const stylesQuery = useMemoFirebase(() => firestore ? query(collection(firestore, 'styles'), where('status', '==', statusFilter)) : null, [statusFilter]);
@@ -459,12 +461,12 @@ export function StyleManagement() {
                             </div>
                             <div className="grid grid-cols-4 items-center gap-4">
                                 <Label htmlFor="op-machine" className="text-right">Machine</Label>
-                                <Select value={newMachineType} onValueChange={(value) => setNewMachineType(value as MachineType[number])}>
+                                <Select value={newMachineType} onValueChange={(value) => setNewMachineType(value)}>
                                     <SelectTrigger className="col-span-3">
                                         <SelectValue placeholder="Select a machine" />
                                     </SelectTrigger>
                                     <SelectContent>
-                                        {MACHINE_TYPES.map(type => (
+                                        {allTypes.map(type => (
                                             <SelectItem key={type} value={type}>{type}</SelectItem>
                                         ))}
                                     </SelectContent>

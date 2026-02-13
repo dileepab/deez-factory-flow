@@ -37,6 +37,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { MACHINE_TYPES } from '@/lib/constants';
+import { useMachineTypes } from '@/hooks/use-machine-types';
 import { useToast } from '@/hooks/use-toast';
 
 export function OperatorManagement() {
@@ -52,7 +53,8 @@ export function OperatorManagement() {
   const [efficiencyRating, setEfficiencyRating] = useState<number>(100);
   const [isSaving, setIsSaving] = useState(false);
 
-  const machineOptions: Option[] = MACHINE_TYPES.map(m => ({ value: m, label: m }));
+  const { allTypes } = useMachineTypes();
+  const machineOptions: Option[] = allTypes.map(m => ({ value: m, label: m }));
 
   const operatorsQuery = useMemoFirebase(
     () => query(collection(firestore, 'users'), where('role', '==', 'operator')),
