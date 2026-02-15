@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import { useConfiguration } from '@/firebase/firestore/use-configuration';
 import { firestore } from '@/firebase/client';
-import { collection, query, where, doc, addDoc, updateDoc, deleteDoc, writeBatch, getDoc, getDocs } from 'firebase/firestore';
+import { collection, query, where, doc, addDoc, updateDoc, deleteDoc, writeBatch, getDoc, getDocs, deleteField } from 'firebase/firestore';
 import type { GarmentStyle, GarmentOperation, MachineType } from '@/lib/types';
 import { MACHINE_TYPES } from '@/lib/constants';
 import { useMachineTypes } from '@/hooks/use-machine-types';
@@ -43,7 +43,15 @@ export function StyleManagement() {
     const [currentOperation, setCurrentOperation] = useState<Partial<GarmentOperation> | null>(null);
 
     const [newStyleName, setNewStyleName] = useState("");
-    const [newStyleQuantity, setNewStyleQuantity] = useState<number>(0);
+    const [newStyleQuantity, setNewStyleQuantity] = useState<number>(0); // Used for Edit Dialog mostly
+    const [newStyleColor, setNewStyleColor] = useState("");
+    const [newVariants, setNewVariants] = useState<{ id: string; color: string; quantity: number }[]>([]);
+
+    // Derived total quantity
+    const totalQuantity = newVariants.length > 0
+        ? newVariants.reduce((sum, v) => sum + v.quantity, 0)
+        : 0;
+
     const [newOperationName, setNewOperationName] = useState("");
     const [newOperationTime, setNewOperationTime] = useState<number>(0);
     const [newMachineType, setNewMachineType] = useState<string>(MACHINE_TYPES[0]);
@@ -54,20 +62,49 @@ export function StyleManagement() {
 
     const isLoading = areStylesLoading || isConfigLoading;
 
+    const handleAddVariant = () => {
+        setNewVariants([...newVariants, { id: Date.now().toString(), color: '', quantity: 0 }]);
+    };
+
+    const handleVariantChange = (id: string, field: 'color' | 'quantity', value: string | number) => {
+        setNewVariants(newVariants.map(v => v.id === id ? { ...v, [field]: value } : v));
+    };
+
+    const handleRemoveVariant = (id: string) => {
+        setNewVariants(newVariants.filter(v => v.id !== id));
+    };
+
     const handleSaveNewStyle = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!firestore || !newStyleName || newStyleQuantity <= 0) return;
+        if (!firestore || !newStyleName || totalQuantity <= 0) return;
+
+        // Finalize variants: Filter out empty ones if needed or validate
+        const validVariants = newVariants.filter(v => v.color && v.quantity > 0);
+        if (validVariants.length === 0) {
+            toast({ variant: "destructive", title: "Error", description: "Please add at least one valid variant." });
+            return;
+        }
+
         try {
-            await addDoc(collection(firestore, 'styles'), {
+            const styleData: any = {
                 name: newStyleName,
-                quantity: newStyleQuantity,
+                quantity: totalQuantity,
                 status: 'active',
                 totalSmv: 0,
                 operations: [],
                 startDate: new Date().toISOString(),
-            });
-            toast({ title: 'Style Created', description: `Style "${newStyleName}" has been added.` });
+                variants: validVariants, // Save variants
+            };
+
+            if (validVariants.length === 1) {
+                styleData.colorVariant = validVariants[0].color;
+            }
+
+            await addDoc(collection(firestore, 'styles'), styleData);
+            toast({ title: 'Style Created', description: `Style "${newStyleName}" has been added with ${validVariants.length} variants.` });
             setIsNewStyleDialogOpen(false);
+            setNewVariants([]);
+            setNewStyleName("");
         } catch (error) {
             console.error("Error creating style: ", error);
             toast({ variant: "destructive", title: "Error", description: "Could not create the new style." });
@@ -78,18 +115,52 @@ export function StyleManagement() {
         setCurrentStyle(style);
         setNewStyleName(style.name);
         setNewStyleQuantity(style.quantity);
+
+        // Load variants or create default from legacy
+        if (style.variants && style.variants.length > 0) {
+            setNewVariants(style.variants);
+        } else if (style.colorVariant) {
+            setNewVariants([{ id: 'default', color: style.colorVariant, quantity: style.quantity }]);
+        } else {
+            setNewVariants([]);
+        }
+
         setIsEditStyleDialogOpen(true);
     };
 
     const handleUpdateStyle = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!firestore || !currentStyle || !newStyleName || newStyleQuantity <= 0) return;
+        if (!firestore || !currentStyle || !newStyleName) return;
+
+        // Calculate total quantity from variants if they exist
+        let updatedQuantity = newStyleQuantity;
+        let validVariants: { id: string; color: string; quantity: number }[] = [];
+
+        if (newVariants.length > 0) {
+            validVariants = newVariants.filter(v => v.color && v.quantity > 0);
+            updatedQuantity = validVariants.reduce((sum, v) => sum + v.quantity, 0);
+        }
+
         try {
             const styleRef = doc(firestore, 'styles', currentStyle.id);
-            await updateDoc(styleRef, { name: newStyleName, quantity: newStyleQuantity });
+            const updateData: any = {
+                name: newStyleName,
+                quantity: updatedQuantity,
+                variants: validVariants
+            };
+
+            // Maintain single colorVariant compatibility
+            if (validVariants.length === 1) {
+                updateData.colorVariant = validVariants[0].color;
+            } else if (validVariants.length > 1) {
+                updateData.colorVariant = deleteField(); // Remove ambiguity if multiple
+            }
+
+            await updateDoc(styleRef, updateData);
             toast({ title: 'Style Updated', description: `Style "${newStyleName}" has been updated.` });
             setIsEditStyleDialogOpen(false);
             setCurrentStyle(null);
+            setNewVariants([]);
         } catch (error) {
             console.error("Error updating style: ", error);
             toast({ variant: "destructive", title: "Error", description: "Could not update the style." });
@@ -283,6 +354,10 @@ export function StyleManagement() {
                                                                 <CardTitle className="text-lg">{style.name}</CardTitle>
                                                                 <CardDescription className="mt-1 flex flex-col">
                                                                     <span>Quantity: {style.quantity} units</span>
+                                                                    {style.variants && style.variants.length > 0
+                                                                        ? <span className="text-muted-foreground text-sm">Variants: {style.variants.length} ({style.variants.map(v => v.color).join(', ')})</span>
+                                                                        : style.colorVariant && <span className="text-muted-foreground text-sm">Color: {style.colorVariant}</span>
+                                                                    }
                                                                     <span>Total SMV: {style.totalSmv.toFixed(2)} min</span>
                                                                 </CardDescription>
                                                             </div>
@@ -405,9 +480,39 @@ export function StyleManagement() {
                                 <Label htmlFor="style-name" className="text-right">Name</Label>
                                 <Input id="style-name" value={newStyleName} onChange={(e) => setNewStyleName(e.target.value)} className="col-span-3" required />
                             </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="quantity" className="text-right">Quantity</Label>
-                                <Input id="quantity" type="number" value={newStyleQuantity} onChange={(e) => setNewStyleQuantity(Number(e.target.value))} className="col-span-3" required min="1" />
+
+                            <div className="col-span-4 border-t pt-4 mt-2">
+                                <div className="flex justify-between items-center mb-2">
+                                    <Label className="font-semibold">Variants (Color & Quantity)</Label>
+                                    <Button type="button" variant="outline" size="sm" onClick={handleAddVariant}>+ Add Variant</Button>
+                                </div>
+                                <div className="space-y-2 max-h-[200px] overflow-y-auto pr-2">
+                                    {newVariants.map((variant, index) => (
+                                        <div key={variant.id} className="flex gap-2 items-center">
+                                            <Input
+                                                placeholder="Color (e.g. Red)"
+                                                value={variant.color}
+                                                onChange={(e) => handleVariantChange(variant.id, 'color', e.target.value)}
+                                                className="flex-1"
+                                            />
+                                            <Input
+                                                type="number"
+                                                placeholder="Qty"
+                                                value={variant.quantity || ''}
+                                                onChange={(e) => handleVariantChange(variant.id, 'quantity', Number(e.target.value))}
+                                                className="w-24"
+                                                min="1"
+                                            />
+                                            <Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveVariant(variant.id)}>
+                                                <Trash className="h-4 w-4 text-muted-foreground hover:text-red-500" />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                    {newVariants.length === 0 && <p className="text-sm text-muted-foreground text-center py-2">No variants added.</p>}
+                                </div>
+                                <div className="flex justify-end mt-2 text-sm font-medium">
+                                    Total Quantity: {totalQuantity}
+                                </div>
                             </div>
                         </div>
                         <DialogFooter>
@@ -430,9 +535,55 @@ export function StyleManagement() {
                                 <Label htmlFor="edit-style-name" className="text-right">Name</Label>
                                 <Input id="edit-style-name" value={newStyleName} onChange={(e) => setNewStyleName(e.target.value)} className="col-span-3" required />
                             </div>
-                            <div className="grid grid-cols-4 items-center gap-4">
-                                <Label htmlFor="edit-quantity" className="text-right">Quantity</Label>
-                                <Input id="edit-quantity" type="number" value={newStyleQuantity} onChange={(e) => setNewStyleQuantity(Number(e.target.value))} className="col-span-3" required min="1" />
+
+                            <div className="col-span-4 border-t pt-4 mt-2">
+                                <div className="flex justify-between items-center mb-2">
+                                    <Label className="font-semibold">Variants (Color & Quantity)</Label>
+                                    <Button type="button" variant="outline" size="sm" onClick={handleAddVariant}>+ Add Variant</Button>
+                                </div>
+                                <div className="space-y-2 max-h-[200px] overflow-y-auto pr-2">
+                                    {newVariants.map((variant) => (
+                                        <div key={variant.id} className="flex gap-2 items-center">
+                                            <Input
+                                                placeholder="Color"
+                                                value={variant.color}
+                                                onChange={(e) => handleVariantChange(variant.id, 'color', e.target.value)}
+                                                className="flex-1"
+                                            />
+                                            <Input
+                                                type="number"
+                                                placeholder="Qty"
+                                                value={variant.quantity || ''}
+                                                onChange={(e) => handleVariantChange(variant.id, 'quantity', Number(e.target.value))}
+                                                className="w-24"
+                                                min="1"
+                                            />
+                                            <Button type="button" variant="ghost" size="icon" onClick={() => handleRemoveVariant(variant.id)}>
+                                                <Trash className="h-4 w-4 text-muted-foreground hover:text-red-500" />
+                                            </Button>
+                                        </div>
+                                    ))}
+                                    {newVariants.length === 0 && (
+                                        <div className="grid grid-cols-4 items-center gap-4 mt-2">
+                                            <Label htmlFor="edit-quantity" className="text-right">Total Qty</Label>
+                                            <Input
+                                                id="edit-quantity"
+                                                type="number"
+                                                value={newStyleQuantity}
+                                                onChange={(e) => setNewStyleQuantity(Number(e.target.value))}
+                                                className="col-span-3"
+                                                required
+                                                min="1"
+                                                placeholder="Only if no variants"
+                                            />
+                                        </div>
+                                    )}
+                                </div>
+                                {newVariants.length > 0 && (
+                                    <div className="flex justify-end mt-2 text-sm font-medium">
+                                        Total: {newVariants.reduce((sum, v) => sum + v.quantity, 0)}
+                                    </div>
+                                )}
                             </div>
                         </div>
                         <DialogFooter>

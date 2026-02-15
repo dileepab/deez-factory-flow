@@ -29,6 +29,16 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
     // State for Mobile Tooltips
     const [openTooltipId, setOpenTooltipId] = useState<string | null>(null);
 
+    // Calculate Max Production Time
+    let productionEndTime = 0;
+    if (schedule) {
+        Object.values(schedule).forEach(events => {
+            events.forEach(e => {
+                if (e.end > productionEndTime) productionEndTime = e.end;
+            });
+        });
+    }
+
     // Colors for operations to distinguish them (Hex for reliability)
     const OP_COLORS = [
         "#3b82f6", // Blue
@@ -396,6 +406,18 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                             <span className="text-[10px] font-bold text-gray-500 rotate-0 md:-rotate-90 transform origin-center whitespace-nowrap opacity-70">{b.name}</span>
                                         </div>
                                     ))}
+
+                                    {/* Production Complete Line */}
+                                    {productionEndTime > 0 && mapWorkEnd(productionEndTime) < (TOTAL_SHIFT_MINUTES - 30) && (
+                                        <div
+                                            className="absolute top-0 bottom-0 border-l-2 border-dashed border-emerald-500 z-30 flex flex-col justify-end pb-2 pl-1"
+                                            style={{ left: `${(mapWorkEnd(productionEndTime) / TOTAL_SHIFT_MINUTES) * 100}%` }}
+                                        >
+                                            <span className="text-[10px] font-bold text-emerald-600 bg-white/90 px-1 py-0.5 rounded shadow-sm whitespace-nowrap border border-emerald-200">
+                                                Production Complete ({formatTime(mapWorkEnd(productionEndTime))})
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Time Ruler */}

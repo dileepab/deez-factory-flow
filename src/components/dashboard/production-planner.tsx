@@ -796,8 +796,41 @@ export function ProductionPlanner(): React.ReactNode {
     // Simulate Schedule for Visualization
     const simResult = useMemo(() => {
         if (!selectedStyle || assignments.length === 0) return { schedule: {}, logs: [] };
-        return simulateProductionSchedule(selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments, operatorAttendance);
-    }, [selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments, operatorAttendance]);
+
+        // Prepare Style List (Primary -> Next)
+        const simulationStyles: GarmentStyle[] = [];
+        const simulationAssignments: Assignment[][] = [];
+
+        // CAPACITY MODE FIX: Scale quantities to fill the day if needed
+        // Strict Mode: Do not scale quantities. User must add Next Style to fill capacity.
+        const scalingFactor = 1;
+
+        const addStyle = (base: GarmentStyle, baseAssigns: Assignment[], isNext: boolean) => {
+            if (base.variants && base.variants.length > 0) {
+                base.variants.forEach(variant => {
+                    simulationStyles.push({
+                        ...base,
+                        id: `${base.id}_${variant.id}`,
+                        name: `${base.name} - ${variant.color}`,
+                        colorVariant: variant.color,
+                        quantity: Math.ceil(variant.quantity * scalingFactor),
+                    });
+                    simulationAssignments.push(baseAssigns);
+                });
+            } else {
+                simulationStyles.push({
+                    ...base,
+                    quantity: Math.ceil((base.quantity || 1000) * scalingFactor)
+                });
+                simulationAssignments.push(baseAssigns);
+            }
+        };
+
+        addStyle(selectedStyle, assignments, false);
+        if (selectedNextStyle) addStyle(selectedNextStyle, nextAssignments, true);
+
+        return simulateProductionSchedule(simulationStyles, simulationAssignments, operators, machineCounts, availableMinutes, switchDelay, operatorAttendance);
+    }, [selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments, operatorAttendance, planningMode]);
 
     // Global bottleneck: "Actual Output" derived from Simulation (Final Good Count)
     const bottleneckOutput = useMemo(() => {
@@ -814,41 +847,57 @@ export function ProductionPlanner(): React.ReactNode {
             nextFinalOps = selectedNextStyle.operations.filter(o => !nextDeps.has(o.id));
         }
 
-        let primaryTotal = 0;
-        let nextTotal = 0;
+        // Track totals per operation ID to find the bottleneck (min) among final ops
+        const primaryOpsOutput = new Map<string, number>();
+        finalOps.forEach(op => primaryOpsOutput.set(op.id, 0));
+
+        console.log('DEBUG: bottleneckOutput Init', {
+            finalOps: finalOps.map(o => o.id),
+            primaryStyleCount: selectedStyle?.variants?.length || 1,
+            selectedStyleId: selectedStyle?.id
+        });
+
+        const nextOpsOutput = new Map<string, number>();
+        nextFinalOps.forEach(op => nextOpsOutput.set(op.id, 0));
+
+        // Determine split index between Primary and Next
+        let primaryStyleCount = 0;
+        if (selectedStyle) {
+            if (selectedStyle.variants && selectedStyle.variants.length > 0) {
+                primaryStyleCount = selectedStyle.variants.length;
+            } else {
+                primaryStyleCount = 1;
+            }
+        }
 
         Object.values(simResult.schedule).forEach(events => {
             events.forEach(ev => {
-                // If the event OP ID matches a final op of Primary Style
-                // Note: Op IDs might clash if styles are same but we handle this via simulation context normally
-                // Ideally simResult should tag events with styleId. 
-                // Currently simResult events don't have styleId, but we can infer or checking if opId is unique enough? 
-                // Actually if same style selected twice, opIDs overlap.
-                // FIX: Simulation was updated to store 'isNextStyle' in opState, but maybe not in schedule event?
-                // Let's check schedule event structure. 
-                // The schedule event object: { start, end, opId, count }
-                // It does NOT have 'isNext'. 
-                // Assume OpIDs are unique across styles usually, or we need to update simulation logic to store style tag.
-                // For now, let's sum based on ID match. If same style twice, it double counts unless we distinguish.
+                // Accumulate for Primary Style Final Ops
+                if (primaryOpsOutput.has(ev.opId)) {
+                    // Check if it belongs to Primary Style range
+                    if (ev.styleIndex < primaryStyleCount) {
+                        primaryOpsOutput.set(ev.opId, (primaryOpsOutput.get(ev.opId) || 0) + ev.count);
+                    }
+                }
 
-                // WAIT: If User selects SAME style for Next, OpIDs match.
-                // We need to differentiate.
-                // However, without changing simulation to output style tag, we can't perfectly distinguish if IDs clash.
-                // But generally styles are different.
-
-                // Let's sum based on OpId matching FinalOps list.
-                // If same style, primaryTotal will capture ALL output (which is technically correct for "Total"), 
-                // but we want split.
-                // For now, if styles are different, this works.
-
-                const outputCounts = calculateOutputFromEvent(ev, finalOps, nextFinalOps);
-                primaryTotal += outputCounts.primary;
-                nextTotal += outputCounts.next;
+                // Accumulate for Next Style Final Ops
+                if (nextOpsOutput.has(ev.opId)) {
+                    // Check if it belongs to Next Style range
+                    if (ev.styleIndex >= primaryStyleCount) {
+                        nextOpsOutput.set(ev.opId, (nextOpsOutput.get(ev.opId) || 0) + ev.count);
+                    }
+                }
             });
         });
 
-        return { primary: Math.floor(primaryTotal), next: Math.floor(nextTotal) };
+        // The output is the MINIMUM of all final operations (bottleneck)
+        // If no final ops, 0. If multiple, min.
+        const primaryMin = finalOps.length > 0 ? Math.min(...Array.from(primaryOpsOutput.values())) : 0;
+        const nextMin = nextFinalOps.length > 0 ? Math.min(...Array.from(nextOpsOutput.values())) : 0;
+
+        return { primary: Math.floor(primaryMin), next: Math.floor(nextMin) };
     }, [selectedStyle, selectedNextStyle, simResult.schedule]);
+
 
     // Calculate actual scheduled completion count per operation from simulation
     const scheduledCountPerOp = useMemo(() => {
@@ -1058,14 +1107,23 @@ export function ProductionPlanner(): React.ReactNode {
                     {planningMode === 'capacity' && (
                         <div className="flex gap-4 justify-end w-full">
                             <div className="p-3 bg-muted/50 rounded-md flex flex-col items-end min-w-[120px]">
-                                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider" title="Based on team size only">Theoretical</span>
+                                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider" title="Theoretical max based on team size">Max Potential</span>
                                 <div className="flex items-baseline gap-1">
-                                    <span className="text-xl font-bold text-muted-foreground">{dailyTarget}</span>
-                                    <span className="text-xs text-muted-foreground">pcs</span>
+                                    <span className="text-xl font-bold text-muted-foreground">
+                                        {(() => {
+                                            const totalSmv = (selectedStyle?.totalSmv || 0) + (selectedNextStyle?.totalSmv || 0);
+                                            const avgSmv = totalSmv / (selectedNextStyle ? 2 : 1);
+                                            const count = availableOperatorIds.length || 0;
+                                            if (!avgSmv || !count) return 0;
+                                            // Simple SMV based capacity: (Mins * Ops) / SMV-in-mins
+                                            return Math.floor((availableMinutes * count * 0.85) / avgSmv); // 85% Efficiency baseline
+                                        })()}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">pcs/day</span>
                                 </div>
                             </div>
                             <div className="p-3 bg-primary/10 border border-primary/20 rounded-md flex flex-col items-end min-w-[150px]">
-                                <span className="text-xs text-primary font-medium uppercase tracking-wider" title="Total finished goods produced today">Actual Output</span>
+                                <span className="text-xs text-primary font-medium uppercase tracking-wider" title="Actual simulation output containing specific order quantities">Scheduled Output</span>
                                 <div className="flex flex-col items-end">
                                     <div className="flex items-baseline gap-1">
                                         <span className="text-3xl font-bold text-primary">
@@ -1082,9 +1140,9 @@ export function ProductionPlanner(): React.ReactNode {
                                         </div>
                                     )}
                                 </div>
-                                {assignments.length > 0 && dailyTarget > 0 && (bottleneckOutput.primary + bottleneckOutput.next) < dailyTarget && (
-                                    <div className="text-[10px] text-destructive font-medium mt-1">
-                                        Loss: {(dailyTarget - (bottleneckOutput.primary + bottleneckOutput.next)).toFixed(0)} pcs ({(((dailyTarget - (bottleneckOutput.primary + bottleneckOutput.next)) / dailyTarget) * 100).toFixed(1)}%)
+                                {assignments.length > 0 && (bottleneckOutput.primary + bottleneckOutput.next) < Math.floor((availableMinutes * (availableOperatorIds.length || 1) * 0.85) / (((selectedStyle?.totalSmv || 10) + (selectedNextStyle?.totalSmv || 0)) / (selectedNextStyle ? 2 : 1))) && (
+                                    <div className="text-[10px] text-amber-600 font-medium mt-1">
+                                        ⚠ Limited by Order Qty
                                     </div>
                                 )}
                             </div>
@@ -1526,6 +1584,38 @@ export function ProductionPlanner(): React.ReactNode {
                                 Publish Plan
                             </Button>
                         </div>
+
+                        <div className="flex flex-wrap gap-6 mb-4 px-4 py-3 bg-muted/30 rounded-lg border border-border/50">
+                            {selectedStyle && (
+                                <div className="flex items-center gap-3">
+                                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Primary</span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium text-foreground">{selectedStyle.name}</span>
+                                        {selectedStyle.colorVariant && (
+                                            <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300 text-xs font-medium border border-blue-200 dark:border-blue-800">
+                                                {selectedStyle.colorVariant}
+                                            </span>
+                                        )}
+                                        <span className="text-muted-foreground text-sm">({selectedStyle.quantity} pcs)</span>
+                                    </div>
+                                </div>
+                            )}
+                            {selectedNextStyle && (
+                                <div className="flex items-center gap-3 pl-6 border-l border-border/50">
+                                    <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Next</span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium text-foreground">{selectedNextStyle.name}</span>
+                                        {selectedNextStyle.colorVariant && (
+                                            <span className="px-2 py-0.5 rounded-full bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-300 text-xs font-medium border border-orange-200 dark:border-orange-800">
+                                                {selectedNextStyle.colorVariant}
+                                            </span>
+                                        )}
+                                        <span className="text-muted-foreground text-sm">({selectedNextStyle.quantity} pcs)</span>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
                         {/* Placeholder until logs are fetched or passed in */}
                         {(() => {
                             const productionLogs: any[] = [];
@@ -1552,6 +1642,6 @@ export function ProductionPlanner(): React.ReactNode {
                     </>
                 )}
             </CardContent>
-        </Card>
+        </Card >
     );
 }

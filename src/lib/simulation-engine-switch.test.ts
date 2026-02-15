@@ -40,8 +40,8 @@ describe('Simulation Engine - Switch Delay', () => {
         const SWITCH_DELAY = 15;
 
         const result = simulateProductionSchedule(
-            style,
-            assignments,
+            [style],
+            [assignments],
             [alice],
             machineCounts,
             availableMinutes,
@@ -114,11 +114,11 @@ describe('Simulation Engine - Switch Delay', () => {
 
         // Increase available minutes to allow multiple tasks
         const result = simulateProductionSchedule(
-            style,
-            [
+            [style],
+            [[
                 { operationId: 'opA', operatorIds: ['alice'] },
                 { operationId: 'opB', operatorIds: ['alice'] }
-            ],
+            ]],
             [alice],
             machineCounts,
             400, // Longer shift
@@ -190,8 +190,8 @@ describe('Simulation Engine - Switch Delay', () => {
         const availableMinutes = 200;
 
         const result = simulateProductionSchedule(
-            styleSameMachine,
-            assignments,
+            [styleSameMachine],
+            [assignments],
             [alice],
             { 'Sewing': 1 },
             availableMinutes,
@@ -258,11 +258,11 @@ describe('Simulation Engine - Switch Delay', () => {
         };
 
         const result = simulateProductionSchedule(
-            styleBalanced,
-            assignments,
+            [style],
+            [assignments],
             [alice],
-            { 'Sewing': 1 },
-            200,
+            machineCounts,
+            availableMinutes,
             5 // 5 min switch delay
         );
 
