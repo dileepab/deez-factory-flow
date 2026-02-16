@@ -182,4 +182,18 @@ describe('DailyTimeline', () => {
 
         expect(screen.getByText('Task 3')).toBeDefined();
     });
+
+    it('does not merge adjacent same-operation segments across color variants', () => {
+        const sameOpDifferentColorSchedule = {
+            'op-1': [
+                { start: 0, end: 20, opId: 'task-1', count: 10, styleIndex: 0, colorVariant: 'Floral Print' },
+                { start: 20, end: 40, opId: 'task-1', count: 10, styleIndex: 0, colorVariant: 'Solid Navy' }
+            ]
+        };
+
+        render(<DailyTimeline {...defaultProps} schedule={sameOpDifferentColorSchedule as any} />);
+
+        expect(screen.getByText('Style A - Floral Print')).toBeDefined();
+        expect(screen.getByText('Style A - Solid Navy')).toBeDefined();
+    });
 });

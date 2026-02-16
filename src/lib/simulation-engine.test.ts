@@ -205,6 +205,57 @@ describe('Simulation Engine', () => {
         expect(totalDuration).toBeLessThanOrEqual(60);
     });
 
+    it('Thread Constraint: Limits same-color parallel overlock usage', () => {
+        const threadLimitedStyle: GarmentStyle = {
+            ...mockStyle,
+            colorVariant: 'Red',
+            operations: [
+                {
+                    id: 'op-overlock',
+                    name: 'Overlock Step',
+                    smv: 60,
+                    machineType: 'Overlock/Serger',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const assignments: Assignment[] = [
+            { operationId: 'op-overlock', operatorIds: ['op-1', 'op-2'] }
+        ];
+
+        const machineCounts = { 'Overlock/Serger': 3 };
+        const availableMinutes = 60;
+
+        const result = simulateProductionSchedule(
+            threadLimitedStyle,
+            assignments,
+            [mockOperator, mockOperator2],
+            machineCounts,
+            availableMinutes,
+            0,
+            {},
+            {},
+            [],
+            {
+                machineType: 'Overlock/Serger',
+                ballsPerMachine: 5,
+                availableByColor: { Red: 5 } // only enough for one concurrent machine
+            }
+        );
+
+        const scheduleA = result.schedule['op-1'] || [];
+        const scheduleB = result.schedule['op-2'] || [];
+
+        let totalDuration = 0;
+        scheduleA.forEach(s => totalDuration += (s.end - s.start));
+        scheduleB.forEach(s => totalDuration += (s.end - s.start));
+
+        // Thread cap should effectively force one-machine behavior for this color.
+        expect(totalDuration).toBeLessThanOrEqual(60);
+    });
+
     it('Capacity Solver: Should split time for one operator on two tasks', () => {
         const ops = [mockOperator];
         const assignArr = [

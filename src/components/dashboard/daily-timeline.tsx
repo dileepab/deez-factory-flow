@@ -12,6 +12,16 @@ interface Assignment {
     operatorIds: string[];
 }
 
+interface ScheduleEvent {
+    start: number;
+    end: number;
+    opId: string;
+    count: number;
+    completed?: boolean;
+    styleIndex?: number;
+    colorVariant?: string;
+}
+
 interface DailyTimelineProps {
     assignedOperators: Operator[];
     assignments: Assignment[];
@@ -19,7 +29,7 @@ interface DailyTimelineProps {
     selectedNextStyle?: GarmentStyle; // Support Next Style
     flowMetrics: Record<string, any>;
     availableMinutes: number;
-    schedule?: Record<string, { start: number, end: number, opId: string, count: number, completed?: boolean, styleIndex?: number, colorVariant?: string }[]>;
+    schedule?: Record<string, ScheduleEvent[]>;
     productionLogs?: ProductionEntry[]; // Optional logs
     isOrderComplete?: boolean;
     switchDelay?: number;
@@ -223,6 +233,14 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
         return parts;
     };
 
+    const canMergeEvents = (current: ScheduleEvent, next: ScheduleEvent) => {
+        if (next.opId !== current.opId) return false;
+        if (next.styleIndex !== current.styleIndex) return false;
+        if ((next.colorVariant || '') !== (current.colorVariant || '')) return false;
+        const gap = next.start - current.end;
+        return gap < 15;
+    };
+
     // State for View Mode and Quick Log
     const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('vertical');
     const [quickLogOpen, setQuickLogOpen] = useState(false);
@@ -401,8 +419,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                         let current = { ...rawEvents[0] };
                                         for (let i = 1; i < rawEvents.length; i++) {
                                             const next = rawEvents[i];
-                                            const gap = next.start - current.end;
-                                            if (next.opId === current.opId && gap < 15) {
+                                            if (canMergeEvents(current, next)) {
                                                 current.end = next.end;
                                                 current.count += next.count;
                                             } else {
@@ -566,8 +583,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                             let current = { ...rawEvents[0] };
                                             for (let i = 1; i < rawEvents.length; i++) {
                                                 const next = rawEvents[i];
-                                                const gap = next.start - current.end;
-                                                if (next.opId === current.opId && gap < 15) {
+                                                if (canMergeEvents(current, next)) {
                                                     current.end = next.end;
                                                     current.count += next.count;
                                                 } else {

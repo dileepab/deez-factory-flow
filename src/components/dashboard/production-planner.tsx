@@ -39,7 +39,13 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MultiSelect, Option } from '@/components/ui/multi-select';
 import { DailyTimeline } from './daily-timeline';
-import { simulateProductionSchedule, solveFluidCapacity, unique, type HistoricalPerformanceMap } from '@/lib/simulation-engine';
+import {
+    simulateProductionSchedule,
+    solveFluidCapacity,
+    unique,
+    type HistoricalPerformanceMap,
+    type ThreadConstraintConfig
+} from '@/lib/simulation-engine';
 import { useAuth } from "@/auth-provider";
 import { useToast } from "@/hooks/use-toast";
 import { doc, setDoc, Timestamp } from "firebase/firestore";
@@ -140,6 +146,8 @@ const PLANNING_OBJECTIVE_WEIGHTS = {
     multitask: 10,
 } as const;
 
+const THREAD_CONSTRAINT_MACHINE = 'Overlock/Serger';
+
 
 
 export function ProductionPlanner(): React.ReactNode {
@@ -165,6 +173,9 @@ export function ProductionPlanner(): React.ReactNode {
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
     const [availableOperatorIds, setAvailableOperatorIds] = useState<string[]>([]);
     const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
+    const [enableThreadConstraints, setEnableThreadConstraints] = useState<boolean>(false);
+    const [threadBallsPerMachine, setThreadBallsPerMachine] = useState<number>(5);
+    const [threadInventoryByColor, setThreadInventoryByColor] = useState<Record<string, number>>({});
     const [operatorAttendance, setOperatorAttendance] = useState<Record<string, { startDelay: number, shiftExtension: number }>>({});
     const [shiftStartTime, setShiftStartTime] = useState<string>("07:30");
     const [enableRollingReplan, setEnableRollingReplan] = useState<boolean>(true);
@@ -238,6 +249,52 @@ export function ProductionPlanner(): React.ReactNode {
         () => applyLiveProgressToStyle(selectedNextStyleRaw),
         [selectedNextStyleRaw, applyLiveProgressToStyle]
     );
+
+    const activeThreadColors = useMemo(() => {
+        const colors: string[] = [];
+        const collectColors = (style: GarmentStyle | undefined) => {
+            if (!style) return;
+            if (style.variants && style.variants.length > 0) {
+                style.variants.forEach(variant => {
+                    const color = variant.color?.trim();
+                    if (color) colors.push(color);
+                });
+                return;
+            }
+
+            const fallbackColor = style.colorVariant?.trim();
+            if (fallbackColor) colors.push(fallbackColor);
+        };
+
+        collectColors(selectedStyle);
+        collectColors(selectedNextStyle);
+        return unique(colors);
+    }, [selectedStyle, selectedNextStyle]);
+
+    useEffect(() => {
+        if (activeThreadColors.length === 0) {
+            setThreadInventoryByColor(prev => (Object.keys(prev).length === 0 ? prev : {}));
+            return;
+        }
+
+        setThreadInventoryByColor(prev => {
+            const next: Record<string, number> = {};
+            const defaultBalls = Math.max(1, Math.floor(threadBallsPerMachine)) * Math.max(1, machineCounts[THREAD_CONSTRAINT_MACHINE] || 1);
+            activeThreadColors.forEach(color => {
+                next[color] = prev[color] ?? defaultBalls;
+            });
+
+            const prevKeys = Object.keys(prev);
+            const nextKeys = Object.keys(next);
+            const hasDifferentSize = prevKeys.length !== nextKeys.length;
+            const hasDifferentValue = nextKeys.some(key => prev[key] !== next[key]);
+
+            if (!hasDifferentSize && !hasDifferentValue) {
+                return prev;
+            }
+            return next;
+        });
+    }, [activeThreadColors, threadBallsPerMachine, machineCounts]);
 
     const getStyleCompletedUnits = useCallback((style: GarmentStyle | undefined): number => {
         if (!style || !style.operations.length) return 0;
@@ -1053,6 +1110,21 @@ export function ProductionPlanner(): React.ReactNode {
         return { simulationStyles, simulationAssignments };
     }, []);
 
+    const threadConstraintConfig = useMemo<ThreadConstraintConfig | undefined>(() => {
+        if (!enableThreadConstraints || activeThreadColors.length === 0) return undefined;
+
+        const availableByColor: Record<string, number> = {};
+        activeThreadColors.forEach(color => {
+            availableByColor[color] = Math.max(0, Math.floor(threadInventoryByColor[color] || 0));
+        });
+
+        return {
+            machineType: THREAD_CONSTRAINT_MACHINE,
+            ballsPerMachine: Math.max(1, Math.floor(threadBallsPerMachine)),
+            availableByColor
+        };
+    }, [enableThreadConstraints, activeThreadColors, threadInventoryByColor, threadBallsPerMachine]);
+
     // Simulate Schedule for Visualization
     const simResult = useMemo(() => {
         if (!selectedStyle || assignments.length === 0) return { schedule: {}, logs: [] };
@@ -1072,7 +1144,9 @@ export function ProductionPlanner(): React.ReactNode {
             availableMinutes,
             switchDelay,
             operatorAttendance,
-            learnedPerformance
+            learnedPerformance,
+            undefined,
+            threadConstraintConfig
         );
     }, [
         selectedStyle,
@@ -1085,6 +1159,7 @@ export function ProductionPlanner(): React.ReactNode {
         switchDelay,
         operatorAttendance,
         learnedPerformance,
+        threadConstraintConfig,
         buildSimulationInputs,
         planningMode,
     ]);
@@ -1259,7 +1334,9 @@ export function ProductionPlanner(): React.ReactNode {
                 availableMinutes,
                 switchDelay,
                 adjustedAttendance,
-                scaleHistoricalPerformance(learnedPerformance, scenario.perfScale)
+                scaleHistoricalPerformance(learnedPerformance, scenario.perfScale),
+                undefined,
+                threadConstraintConfig
             );
 
             const output = calculateBottleneckForSchedule(selectedStyle, selectedNextStyle, simulated.schedule);
@@ -1281,6 +1358,7 @@ export function ProductionPlanner(): React.ReactNode {
         switchDelay,
         operatorAttendance,
         learnedPerformance,
+        threadConstraintConfig,
         buildSimulationInputs,
         calculateBottleneckForSchedule,
     ]);
@@ -2053,6 +2131,65 @@ export function ProductionPlanner(): React.ReactNode {
                                     />
                                 </div>
                             ))}
+                        </div>
+                    )}
+
+                    {selectedStyle && activeThreadColors.length > 0 && (
+                        <div className="p-4 mb-4 border rounded-md bg-slate-50 dark:bg-slate-900/50">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+                                <div>
+                                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                        Thread Inventory (Color Constraints)
+                                    </h4>
+                                    <p className="text-[11px] text-muted-foreground mt-1">
+                                        Limits parallel {THREAD_CONSTRAINT_MACHINE} by color.
+                                    </p>
+                                </div>
+                                <Button
+                                    size="sm"
+                                    variant={enableThreadConstraints ? "default" : "outline"}
+                                    onClick={() => setEnableThreadConstraints(prev => !prev)}
+                                >
+                                    {enableThreadConstraints ? 'Enabled' : 'Disabled'}
+                                </Button>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-3">
+                                <div className="space-y-1">
+                                    <label className="text-[10px] font-medium truncate block" title="Balls needed per machine setup">
+                                        Balls / Machine ({THREAD_CONSTRAINT_MACHINE})
+                                    </label>
+                                    <Input
+                                        type="number"
+                                        className="h-7 text-xs bg-background"
+                                        value={threadBallsPerMachine}
+                                        min={1}
+                                        onChange={(e) => setThreadBallsPerMachine(Math.max(1, parseInt(e.target.value) || 1))}
+                                    />
+                                </div>
+                            </div>
+
+                            {enableThreadConstraints && (
+                                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                    {activeThreadColors.map(color => (
+                                        <div key={color} className="space-y-1">
+                                            <label className="text-[10px] font-medium truncate block" title={color}>
+                                                {color} (balls)
+                                            </label>
+                                            <Input
+                                                type="number"
+                                                className="h-7 text-xs bg-background"
+                                                value={threadInventoryByColor[color] ?? 0}
+                                                min={0}
+                                                onChange={(e) => {
+                                                    const value = Math.max(0, parseInt(e.target.value) || 0);
+                                                    setThreadInventoryByColor(prev => ({ ...prev, [color]: value }));
+                                                }}
+                                            />
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     )}
                 </div>

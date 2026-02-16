@@ -5,6 +5,11 @@ import type { GarmentStyle, Operator, Assignment } from '@/lib/types';
 export const unique = <T,>(arr: T[]) => Array.from(new Set(arr));
 
 export type HistoricalPerformanceMap = Record<string, Record<string, number>>;
+export type ThreadConstraintConfig = {
+    machineType: string;
+    ballsPerMachine: number;
+    availableByColor: Record<string, number>;
+};
 
 const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(max, value));
@@ -48,7 +53,8 @@ export const simulateProductionSchedule = (
     switchDelay: number = 5,
     operatorAttendanceOrNextStyle: Record<string, { startDelay: number; shiftExtension: number }> | GarmentStyle = {},
     historicalPerformanceOrNextStyle: HistoricalPerformanceMap | GarmentStyle | Assignment[] = {},
-    legacyNextAssignmentsOrAttendance: Assignment[] | Record<string, number | { startDelay?: number; shiftExtension?: number }> = []
+    legacyNextAssignmentsOrAttendance: Assignment[] | Record<string, number | { startDelay?: number; shiftExtension?: number }> = [],
+    threadConstraints?: ThreadConstraintConfig
 ) => {
     const isStyleArg = (value: unknown): value is GarmentStyle =>
         !!value &&
@@ -138,6 +144,13 @@ export const simulateProductionSchedule = (
 
     const styles = legacyNextStyle ? [...baseStyles, legacyNextStyle] : baseStyles;
     const allAssignments = legacyNextStyle ? [...baseAssignments, parsedLegacyNextAssignments] : baseAssignments;
+    const normalizedThreadConstraints = threadConstraints && threadConstraints.machineType
+        ? {
+            machineType: threadConstraints.machineType.trim(),
+            ballsPerMachine: Math.max(1, Math.floor(threadConstraints.ballsPerMachine || 1)),
+            availableByColor: threadConstraints.availableByColor || {}
+        }
+        : undefined;
 
     // 1. Setup Logging & Output
     const logs: string[] = [];
@@ -155,6 +168,7 @@ export const simulateProductionSchedule = (
     const operatorLastMachine = new Map<string, string>();
     const operatorLastOpId = new Map<string, string>();
     const operatorLastColor = new Map<string, string>();
+    const threadMachineUsageByColor = new Map<string, number>();
 
     const schedule: Record<string, { start: number, end: number, opId: string, count: number, isNextStyle?: boolean, colorVariant?: string, styleIndex: number }[]> = {};
     operators.forEach(o => schedule[o.id] = []);
@@ -255,6 +269,13 @@ export const simulateProductionSchedule = (
 
         const userProcessedCounts = new Map<string, Map<string, number>>();
         operators.forEach(u => userProcessedCounts.set(u.id, new Map()));
+        const threadMachineCap = (() => {
+            const styleColor = style.colorVariant;
+            if (!normalizedThreadConstraints || !styleColor) return Number.POSITIVE_INFINITY;
+            const balls = normalizedThreadConstraints.availableByColor?.[styleColor];
+            if (typeof balls !== 'number' || !isFinite(balls)) return 0;
+            return Math.max(0, Math.floor(Math.max(0, balls) / normalizedThreadConstraints.ballsPerMachine));
+        })();
 
         return {
             effectiveDependencies,
@@ -264,6 +285,7 @@ export const simulateProductionSchedule = (
             inventory,
             remainingTargets,
             wipCaps,
+            threadMachineCap,
             userProcessedCounts,
             assignments
         };
@@ -287,7 +309,7 @@ export const simulateProductionSchedule = (
             const state = opState.get(uid)!;
             const currentStyle = styles[state.styleIndex];
             const meta = styleMeta[state.styleIndex];
-            const op = currentStyle.operations.find(o => o.id === state.opId);
+                const op = currentStyle.operations.find(o => o.id === state.opId);
 
             schedule[uid].push({
                 start: state.startTick,
@@ -306,6 +328,15 @@ export const simulateProductionSchedule = (
                 const mType = op.machineType.trim();
                 const currentUse = machineUsage.get(mType) || 1;
                 machineUsage.set(mType, Math.max(0, currentUse - 1));
+                if (
+                    normalizedThreadConstraints &&
+                    state.colorVariant &&
+                    mType === normalizedThreadConstraints.machineType
+                ) {
+                    const key = state.colorVariant;
+                    const currentThreadUse = threadMachineUsageByColor.get(key) || 1;
+                    threadMachineUsageByColor.set(key, Math.max(0, currentThreadUse - 1));
+                }
 
                 const currentInv = meta.inventory.get(op.id) || 0;
                 meta.inventory.set(op.id, currentInv + state.count);
@@ -391,6 +422,16 @@ export const simulateProductionSchedule = (
                     const mUsed = machineUsage.get(mType) || 0;
                     const mTotal = machineCounts[mType] || 1;
                     if (mUsed >= mTotal) continue;
+                    const currentColor = style.colorVariant;
+                    if (
+                        normalizedThreadConstraints &&
+                        currentColor &&
+                        mType === normalizedThreadConstraints.machineType
+                    ) {
+                        const threadCap = meta.threadMachineCap;
+                        const threadUsed = threadMachineUsageByColor.get(currentColor) || 0;
+                        if (threadUsed >= threadCap) continue;
+                    }
 
                     let maxInput = Infinity;
                     const deps = meta.effectiveDependencies.get(op.id) || [];
@@ -439,7 +480,6 @@ export const simulateProductionSchedule = (
                     const lastOpId = operatorLastOpId.get(user.id);
                     const lastColor = operatorLastColor.get(user.id);
                     let delay = 0;
-                    const currentColor = style.colorVariant;
 
                     if (lastType && (lastType !== mType || (lastOpId && lastOpId !== op.id))) {
                         delay = switchDelay;
@@ -459,6 +499,13 @@ export const simulateProductionSchedule = (
                     });
 
                     machineUsage.set(mType, mUsed + 1);
+                    if (
+                        normalizedThreadConstraints &&
+                        currentColor &&
+                        mType === normalizedThreadConstraints.machineType
+                    ) {
+                        threadMachineUsageByColor.set(currentColor, (threadMachineUsageByColor.get(currentColor) || 0) + 1);
+                    }
                     operatorLastMachine.set(user.id, mType);
                     operatorLastOpId.set(user.id, op.id);
                     // Note: Color is updated on release to handle delays correctly for next task? 
