@@ -149,6 +149,7 @@ vi.mock('firebase/firestore', async (importOriginal) => {
         writeBatch: () => mockWriteBatch(),
         getDoc: () => mockGetDoc(),
         getDocs: () => mockGetDocs(),
+        deleteField: () => 'DELETE_FIELD_SENTINEL',
     };
 });
 
@@ -217,7 +218,17 @@ describe('StyleManagement', () => {
         });
 
         fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'New Jeans' } });
-        fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '200' } });
+
+        // Add Variant
+        const addVariantBtn = screen.getByText('+ Add Variant');
+        fireEvent.click(addVariantBtn);
+
+        // Fill Variant
+        const colorInput = screen.getByPlaceholderText('Color (e.g. Red)');
+        fireEvent.change(colorInput, { target: { value: 'Blue' } });
+
+        const qtyInput = screen.getByPlaceholderText('Qty');
+        fireEvent.change(qtyInput, { target: { value: '200' } });
 
         // Submit
         fireEvent.click(screen.getByText('Create Style'));
@@ -228,7 +239,13 @@ describe('StyleManagement', () => {
                 expect.objectContaining({
                     name: 'New Jeans',
                     quantity: 200,
-                    status: 'active'
+                    status: 'active',
+                    variants: expect.arrayContaining([
+                        expect.objectContaining({
+                            color: 'Blue',
+                            quantity: 200
+                        })
+                    ])
                 })
             );
         });
@@ -247,13 +264,32 @@ describe('StyleManagement', () => {
         });
 
         fireEvent.change(screen.getByDisplayValue('T-Shirt Basic'), { target: { value: 'T-Shirt Premium' } });
+
+        // Add Variant to existing style
+        const addVariantBtn = screen.getByText('+ Add Variant');
+        fireEvent.click(addVariantBtn);
+
+        // Fill Variant
+        const colorInputs = screen.getAllByPlaceholderText('Color');
+        fireEvent.change(colorInputs[0], { target: { value: 'Green' } });
+
+        const qtyInputs = screen.getAllByPlaceholderText('Qty');
+        fireEvent.change(qtyInputs[0], { target: { value: '150' } });
+
         fireEvent.click(screen.getByText('Save Changes'));
 
         await waitFor(() => {
             expect(mockUpdateDoc).toHaveBeenCalledWith(
                 undefined,
                 expect.objectContaining({
-                    name: 'T-Shirt Premium'
+                    name: 'T-Shirt Premium',
+                    quantity: 150,
+                    variants: expect.arrayContaining([
+                        expect.objectContaining({
+                            color: 'Green',
+                            quantity: 150
+                        })
+                    ])
                 })
             );
         });

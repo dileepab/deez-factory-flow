@@ -4,23 +4,145 @@ import type { GarmentStyle, Operator, Assignment } from '@/lib/types';
 // Helper: Filter unique items
 export const unique = <T,>(arr: T[]) => Array.from(new Set(arr));
 
+export type HistoricalPerformanceMap = Record<string, Record<string, number>>;
+
+const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, value));
+
+const getOperatorMinutes = (
+    availableMinutes: number,
+    attendance: { startDelay: number; shiftExtension: number } | undefined
+): number => {
+    const startDelay = attendance?.startDelay || 0;
+    const shiftExtension = attendance?.shiftExtension || 0;
+    return Math.max(0, availableMinutes + shiftExtension - startDelay);
+};
+
+const getHistoricalMultiplier = (
+    historicalPerformance: HistoricalPerformanceMap,
+    operatorId: string,
+    operationId: string
+): number => {
+    const value = historicalPerformance?.[operatorId]?.[operationId];
+    if (typeof value !== 'number' || !isFinite(value)) {
+        return 1;
+    }
+    return clamp(value, 0.6, 1.5);
+};
+
+const deriveWipCapForOperation = (opSmvSeconds: number): number => {
+    const smvMinutes = Math.max(0.25, opSmvSeconds / 60);
+    // Cap WIP to roughly 30-45 minutes worth of work to reduce upstream overproduction.
+    const suggested = Math.round(35 / smvMinutes);
+    return clamp(suggested, 8, 60);
+};
+
 // Helper: Simulate Minute-by-Minute Production for Timeline
 // Returns a schedule of segments for each operator
 export const simulateProductionSchedule = (
-    style: GarmentStyle,
-    assignments: Assignment[],
+    stylesInput: GarmentStyle[] | GarmentStyle,
+    allAssignmentsInput: Assignment[][] | Assignment[], // Array of assignment arrays corresponding to styles
     operators: Operator[],
     machineCounts: Record<string, number>,
     availableMinutes: number,
     switchDelay: number = 5,
-    nextStyle?: GarmentStyle,
-    nextAssignments?: Assignment[],
-    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {}
+    operatorAttendanceOrNextStyle: Record<string, { startDelay: number; shiftExtension: number }> | GarmentStyle = {},
+    historicalPerformanceOrNextStyle: HistoricalPerformanceMap | GarmentStyle | Assignment[] = {},
+    legacyNextAssignmentsOrAttendance: Assignment[] | Record<string, number | { startDelay?: number; shiftExtension?: number }> = []
 ) => {
+    const isStyleArg = (value: unknown): value is GarmentStyle =>
+        !!value &&
+        typeof value === 'object' &&
+        'operations' in (value as any) &&
+        Array.isArray((value as any).operations);
+
+    const isAssignmentArrayArg = (value: unknown): value is Assignment[] =>
+        Array.isArray(value) &&
+        (value.length === 0 || (typeof value[0] === 'object' && value[0] !== null && 'operationId' in (value[0] as any)));
+
+    const normalizeAttendanceArg = (value: unknown): Record<string, { startDelay: number; shiftExtension: number }> | null => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+        const rawEntries = Object.entries(value as Record<string, unknown>);
+        if (rawEntries.length === 0) return {};
+
+        const normalized: Record<string, { startDelay: number; shiftExtension: number }> = {};
+        for (const [uid, raw] of rawEntries) {
+            if (typeof raw === 'number' && isFinite(raw)) {
+                normalized[uid] = { startDelay: Math.max(0, raw), shiftExtension: 0 };
+                continue;
+            }
+
+            if (raw && typeof raw === 'object') {
+                const startRaw = (raw as any).startDelay;
+                const extensionRaw = (raw as any).shiftExtension;
+                if (startRaw === undefined && extensionRaw === undefined) return null;
+
+                const startDelay = Number(startRaw ?? 0);
+                const shiftExtension = Number(extensionRaw ?? 0);
+                normalized[uid] = {
+                    startDelay: isFinite(startDelay) ? Math.max(0, startDelay) : 0,
+                    shiftExtension: isFinite(shiftExtension) ? shiftExtension : 0
+                };
+                continue;
+            }
+
+            return null;
+        }
+
+        return normalized;
+    };
+
+    const baseStyles = Array.isArray(stylesInput) ? stylesInput : [stylesInput];
+    const baseAssignments = Array.isArray(allAssignmentsInput[0])
+        ? allAssignmentsInput as Assignment[][]
+        : [allAssignmentsInput as Assignment[]];
+
+    let operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {};
+    let historicalPerformance: HistoricalPerformanceMap = {};
+    let legacyNextStyle: GarmentStyle | undefined;
+    let parsedLegacyNextAssignments: Assignment[] = [];
+    const trailingLegacyAttendance = normalizeAttendanceArg(legacyNextAssignmentsOrAttendance);
+
+    // Legacy overload A:
+    // simulate(style, assignments, operators, machines, mins, delay, nextStyle, nextAssignments)
+    if (isStyleArg(operatorAttendanceOrNextStyle)) {
+        legacyNextStyle = operatorAttendanceOrNextStyle;
+        if (isAssignmentArrayArg(historicalPerformanceOrNextStyle)) {
+            parsedLegacyNextAssignments = historicalPerformanceOrNextStyle;
+        } else if (isAssignmentArrayArg(legacyNextAssignmentsOrAttendance)) {
+            parsedLegacyNextAssignments = legacyNextAssignmentsOrAttendance;
+        } else {
+            parsedLegacyNextAssignments = [];
+        }
+    } else {
+        operatorAttendance = normalizeAttendanceArg(operatorAttendanceOrNextStyle) || {};
+
+        // Legacy overload B:
+        // simulate(style, assignments, operators, machines, mins, delay, attendance, nextStyle, nextAssignments)
+        if (isStyleArg(historicalPerformanceOrNextStyle)) {
+            legacyNextStyle = historicalPerformanceOrNextStyle;
+            parsedLegacyNextAssignments = isAssignmentArrayArg(legacyNextAssignmentsOrAttendance)
+                ? legacyNextAssignmentsOrAttendance
+                : [];
+        } else {
+            historicalPerformance = (historicalPerformanceOrNextStyle as HistoricalPerformanceMap) || {};
+        }
+    }
+
+    // Legacy overload C:
+    // simulate(style, assignments, operators, machines, mins, delay, undefined, undefined, operatorDelays)
+    if (Object.keys(operatorAttendance).length === 0 && trailingLegacyAttendance) {
+        operatorAttendance = trailingLegacyAttendance;
+    }
+
+    const styles = legacyNextStyle ? [...baseStyles, legacyNextStyle] : baseStyles;
+    const allAssignments = legacyNextStyle ? [...baseAssignments, parsedLegacyNextAssignments] : baseAssignments;
+
     // 1. Setup Logging & Output
     const logs: string[] = [];
     const log = (msg: string) => { if (logs.length < 500) logs.push(msg); };
-    log(`SIM START. Machines=${JSON.stringify(machineCounts)}. Delay=${switchDelay}`);
+    log(`SIM START. Machines=${JSON.stringify(machineCounts)}. Delay=${switchDelay}. Styles=${styles.length}`);
 
     // Determine Logic Simulation Duration (Base + Max OT)
     let maxSimulationTicks = availableMinutes;
@@ -29,136 +151,37 @@ export const simulateProductionSchedule = (
         if (userEnd > maxSimulationTicks) maxSimulationTicks = userEnd;
     });
 
-    // Track Last Machine for Delay Logic
+    // Track Last State for Delay Logic
     const operatorLastMachine = new Map<string, string>();
     const operatorLastOpId = new Map<string, string>();
+    const operatorLastColor = new Map<string, string>();
 
-    // 1.1 Redundant Dependency Removal (Transitive Reduction)
-    const effectiveDependencies = new Map<string, string[]>();
-
-    // Helper to get all ancestors
-    const getAncestors = (opId: string, memo = new Map<string, Set<string>>()): Set<string> => {
-        if (memo.has(opId)) return memo.get(opId)!;
-        const ancestors = new Set<string>();
-        const op = style.operations.find(o => o.id === opId);
-        if (op && op.dependencies) {
-            op.dependencies.forEach(d => {
-                ancestors.add(d);
-                getAncestors(d, memo).forEach(a => ancestors.add(a));
-            });
-        }
-        memo.set(opId, ancestors);
-        return ancestors;
-    };
-
-    style.operations.forEach(op => {
-        if (!op.dependencies || op.dependencies.length === 0) {
-            effectiveDependencies.set(op.id, []);
-            return;
-        }
-
-        const originalDeps = [...op.dependencies];
-        const ancestorsMap = new Map<string, Set<string>>();
-        const toRemove = new Set<string>();
-
-        originalDeps.forEach(dep => {
-            originalDeps.forEach(other => {
-                if (dep === other) return;
-                const otherAncestors = getAncestors(other, ancestorsMap);
-                if (otherAncestors.has(dep)) {
-                    toRemove.add(dep);
-                }
-            });
-        });
-
-        effectiveDependencies.set(op.id, originalDeps.filter(d => !toRemove.has(d)));
-    });
-
-    const schedule: Record<string, { start: number, end: number, opId: string, count: number }[]> = {};
+    const schedule: Record<string, { start: number, end: number, opId: string, count: number, isNextStyle?: boolean, colorVariant?: string, styleIndex: number }[]> = {};
     operators.forEach(o => schedule[o.id] = []);
 
-    // 1.2 Calculate Ideal Weights (Target Ratios)
-    const assignArr = assignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
+    // --- PRE-CALCULATION PER STYLE ---
+    const styleMeta = styles.map((style, index) => {
+        const assignments = allAssignments[index] || [];
 
-    // Pass attendance to solver
-    const solvedWeights = solveFluidCapacity(style, assignArr, operators, machineCounts, availableMinutes, operatorAttendance);
-
-    const targetRatios = new Map<string, Map<string, number>>();
-    operators.forEach(u => targetRatios.set(u.id, new Map()));
-
-    solvedWeights.forEach((res, opId) => {
-        if (res.finalWeights) {
-            res.finalWeights.forEach((w, uid) => {
-                targetRatios.get(uid)?.set(opId, w);
-            });
-        }
-    });
-
-    const userProcessedCounts = new Map<string, Map<string, number>>();
-    operators.forEach(u => userProcessedCounts.set(u.id, new Map()));
-
-    // 1.5 Pre-calculate Successors
-    const successors = new Map<string, string[]>();
-    style.operations.forEach(op => {
-        if (op.dependencies) {
-            op.dependencies.forEach(depId => {
-                const list = successors.get(depId) || [];
-                list.push(op.id);
-                successors.set(depId, list);
-            });
-        }
-    });
-
-    // 2. Initialize World State & Targets
-    const inventory = new Map<string, number>();
-    const remainingTargets = new Map<string, number>();
-    const totalOrderQty = style.quantity || 10000;
-
-    style.operations.forEach(op => {
-        const done = op.completedQuantity || 0;
-        const left = Math.max(0, totalOrderQty - done);
-        remainingTargets.set(op.id, left);
-    });
-
-    // B. Calculate Initial Inventory (WIP)
-    style.operations.forEach(op => {
-        let myOutputBuffer = op.completedQuantity || 0;
-        const consumers = style.operations.filter(c => {
-            const deps = effectiveDependencies.get(c.id) || [];
-            return deps.includes(op.id);
-        });
-        consumers.forEach(c => {
-            myOutputBuffer -= (c.completedQuantity || 0);
-        });
-        inventory.set(op.id, Math.max(0, myOutputBuffer));
-    });
-
-    // 2.5 Initialize Next Style State
-    const nextInventory = new Map<string, number>();
-    const nextRemainingTargets = new Map<string, number>();
-    const nextSuccessors = new Map<string, string[]>();
-    const nextEffectiveDependencies = new Map<string, string[]>();
-    const nextTargetRatios = new Map<string, Map<string, number>>();
-    const nextUserProcessedCounts = new Map<string, Map<string, number>>();
-
-    if (nextStyle && nextAssignments) {
-        const getNextAncestors = (opId: string, memo = new Map<string, Set<string>>()): Set<string> => {
+        // 1.1 Redundant Dependency Removal
+        const effectiveDependencies = new Map<string, string[]>();
+        const getAncestors = (opId: string, memo = new Map<string, Set<string>>()): Set<string> => {
             if (memo.has(opId)) return memo.get(opId)!;
             const ancestors = new Set<string>();
-            const op = nextStyle.operations.find(o => o.id === opId);
+            const op = style.operations.find(o => o.id === opId);
             if (op && op.dependencies) {
                 op.dependencies.forEach(d => {
                     ancestors.add(d);
-                    getNextAncestors(d, memo).forEach(a => ancestors.add(a));
+                    getAncestors(d, memo).forEach(a => ancestors.add(a));
                 });
             }
             memo.set(opId, ancestors);
             return ancestors;
         };
 
-        nextStyle.operations.forEach(op => {
+        style.operations.forEach(op => {
             if (!op.dependencies || op.dependencies.length === 0) {
-                nextEffectiveDependencies.set(op.id, []);
+                effectiveDependencies.set(op.id, []);
                 return;
             }
             const originalDeps = [...op.dependencies];
@@ -167,54 +190,89 @@ export const simulateProductionSchedule = (
             originalDeps.forEach(dep => {
                 originalDeps.forEach(other => {
                     if (dep === other) return;
-                    if (getNextAncestors(other, ancestorsMap).has(dep)) toRemove.add(dep);
+                    if (getAncestors(other, ancestorsMap).has(dep)) toRemove.add(dep);
                 });
             });
-            nextEffectiveDependencies.set(op.id, originalDeps.filter(d => !toRemove.has(d)));
+            effectiveDependencies.set(op.id, originalDeps.filter(d => !toRemove.has(d)));
         });
 
-        nextStyle.operations.forEach(op => {
-            if (op.dependencies) {
-                op.dependencies.forEach(depId => {
-                    const list = nextSuccessors.get(depId) || [];
-                    list.push(op.id);
-                    nextSuccessors.set(depId, list);
-                });
-            }
-        });
+        // 1.2 Calculate Ideal Weights (Target Ratios)
+        const assignArr = assignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
+        const solvedWeights = solveFluidCapacity(style, assignArr, operators, machineCounts, availableMinutes, operatorAttendance);
 
-        const nextAssignArr = nextAssignments.map(a => ({ operationId: a.operationId, operatorIds: a.operatorIds }));
-        const nextSolvedWeights = solveFluidCapacity(nextStyle, nextAssignArr, operators, machineCounts, availableMinutes, operatorAttendance);
-        operators.forEach(u => nextTargetRatios.set(u.id, new Map()));
-        nextSolvedWeights.forEach((res, opId) => {
+        const targetRatios = new Map<string, Map<string, number>>();
+        operators.forEach(u => targetRatios.set(u.id, new Map()));
+        solvedWeights.forEach((res, opId) => {
             if (res.finalWeights) {
                 res.finalWeights.forEach((w, uid) => {
-                    nextTargetRatios.get(uid)?.set(opId, w);
+                    targetRatios.get(uid)?.set(opId, w);
                 });
             }
         });
-        operators.forEach(u => nextUserProcessedCounts.set(u.id, new Map()));
 
-        const nextOrderQty = nextStyle.quantity || 10000;
-        nextStyle.operations.forEach(op => {
+        // 1.5 Pre-calculate Successors
+        const successors = new Map<string, string[]>();
+        style.operations.forEach(op => {
+            if (op.dependencies) {
+                op.dependencies.forEach(depId => {
+                    const list = successors.get(depId) || [];
+                    list.push(op.id);
+                    successors.set(depId, list);
+                });
+            }
+        });
+        const finalOperationIds = new Set(
+            style.operations
+                .filter(op => !successors.has(op.id) || (successors.get(op.id)?.length || 0) === 0)
+                .map(op => op.id)
+        );
+
+        // 2. Initialize State
+        const inventory = new Map<string, number>();
+        const remainingTargets = new Map<string, number>();
+        const wipCaps = new Map<string, number>();
+        const totalOrderQty = style.quantity || 10000;
+
+        style.operations.forEach(op => {
             const done = op.completedQuantity || 0;
-            const left = Math.max(0, nextOrderQty - done);
-            nextRemainingTargets.set(op.id, left);
+            const left = Math.max(0, totalOrderQty - done);
+            remainingTargets.set(op.id, left);
+            wipCaps.set(op.id, deriveWipCapForOperation(op.smv));
+        });
 
-            let myOutput = op.completedQuantity || 0;
-            const consumers = nextStyle.operations.filter(c => {
-                const deps = nextEffectiveDependencies.get(c.id) || [];
+        // Initial Inventory
+        style.operations.forEach(op => {
+            let myOutputBuffer = op.completedQuantity || 0;
+            const consumers = style.operations.filter(c => {
+                const deps = effectiveDependencies.get(c.id) || [];
                 return deps.includes(op.id);
             });
-            consumers.forEach(c => myOutput -= (c.completedQuantity || 0));
-            nextInventory.set(op.id, Math.max(0, myOutput));
+            consumers.forEach(c => {
+                myOutputBuffer -= (c.completedQuantity || 0);
+            });
+            inventory.set(op.id, Math.max(0, myOutputBuffer));
         });
-    }
+
+        const userProcessedCounts = new Map<string, Map<string, number>>();
+        operators.forEach(u => userProcessedCounts.set(u.id, new Map()));
+
+        return {
+            effectiveDependencies,
+            targetRatios,
+            successors,
+            finalOperationIds,
+            inventory,
+            remainingTargets,
+            wipCaps,
+            userProcessedCounts,
+            assignments
+        };
+    });
 
     const machineUsage = new Map<string, number>();
-    const opState = new Map<string, { busyUntil: number, opId: string, startTick: number, count: number, isNextStyle?: boolean }>();
+    const opState = new Map<string, { busyUntil: number, opId: string, startTick: number, count: number, styleIndex: number, colorVariant?: string }>();
 
-    // 3. Simulation Loop - Run until Max Ticks
+    // 3. Simulation Loop
     for (let t = 0; t < maxSimulationTicks; t++) {
 
         // A. Release Resources
@@ -227,39 +285,36 @@ export const simulateProductionSchedule = (
 
         finishedIds.forEach(uid => {
             const state = opState.get(uid)!;
-            const isNext = state.isNextStyle;
-            const currentStyle = isNext ? nextStyle! : style;
+            const currentStyle = styles[state.styleIndex];
+            const meta = styleMeta[state.styleIndex];
             const op = currentStyle.operations.find(o => o.id === state.opId);
 
             schedule[uid].push({
                 start: state.startTick,
                 end: state.busyUntil,
                 opId: state.opId,
-                count: state.count
+                count: state.count,
+                isNextStyle: state.styleIndex > 0, // Legacy support flag
+                styleIndex: state.styleIndex,
+                colorVariant: state.colorVariant
             });
 
             if (op) {
-                // Update Last Machine Type Logic
                 operatorLastMachine.set(uid, op.machineType.trim());
+                if (state.colorVariant) operatorLastColor.set(uid, state.colorVariant);
 
                 const mType = op.machineType.trim();
                 const currentUse = machineUsage.get(mType) || 1;
                 machineUsage.set(mType, Math.max(0, currentUse - 1));
 
-                const targetInventory = isNext ? nextInventory : inventory;
-                const currentInv = targetInventory.get(op.id) || 0;
-                targetInventory.set(op.id, currentInv + state.count);
+                const currentInv = meta.inventory.get(op.id) || 0;
+                meta.inventory.set(op.id, currentInv + state.count);
 
-                const targetUserCounts = isNext ? nextUserProcessedCounts : userProcessedCounts;
-                const uMap = targetUserCounts.get(uid);
+                const uMap = meta.userProcessedCounts.get(uid);
                 if (uMap) uMap.set(op.id, (uMap.get(op.id) || 0) + state.count);
 
-                const targetRemaining = isNext ? nextRemainingTargets : remainingTargets;
-                const left = targetRemaining.get(op.id) || 0;
-                targetRemaining.set(op.id, Math.max(0, left - state.count));
-
-                const styleLabel = isNext ? "(NEXT)" : "";
-                log(`T=${t.toFixed(0)} RELEASE ${uid} ${mType}. Output ${op.name} ${styleLabel}: +${state.count}`);
+                const styleTag = state.styleIndex > 0 ? ' (NEXT)' : '';
+                log(`T=${t.toFixed(0)} RELEASE ${uid} ${mType}. Output ${op.name} (S${state.styleIndex})${styleTag}: +${state.count}`);
             }
             opState.delete(uid);
         });
@@ -268,41 +323,41 @@ export const simulateProductionSchedule = (
         operators.forEach(user => {
             if (opState.has(user.id)) return;
 
-            // ATTENDANCE & SHIFT CHECK
             const att = operatorAttendance[user.id] || { startDelay: 0, shiftExtension: 0 };
             const startCheck = att.startDelay || 0;
             const endCheck = availableMinutes + (att.shiftExtension || 0);
 
-            // Too early (late start) OR Too late (shift ended)
             if (t < startCheck || t >= endCheck) return;
 
-            const tryAssign = (
-                currentStyle: GarmentStyle,
-                currentAssignments: Assignment[],
-                currentInventory: Map<string, number>,
-                currentRemainingTargets: Map<string, number>,
-                currentSuccessors: Map<string, string[]>,
-                currentEffectiveDependencies: Map<string, string[]>,
-                currentTargetRatios: Map<string, Map<string, number>>,
-                currentUserProcessedCounts: Map<string, Map<string, number>>,
-                isNext: boolean
-            ): boolean => {
-                const myAssignments = currentAssignments.filter(a => a.operatorIds.includes(user.id));
-                if (myAssignments.length === 0) return false;
+            // Try assigning tasks in style order (0 -> 1 -> N)
+            for (let sIdx = 0; sIdx < styles.length; sIdx++) {
+                const style = styles[sIdx];
+                const meta = styleMeta[sIdx];
+
+                // --- ASSIGNMENT LOGIC (Inlined for scope access) ---
+                const myAssignments = meta.assignments.filter(a => a.operatorIds.includes(user.id));
+                if (myAssignments.length === 0) continue; // Try next style
 
                 let candidates = myAssignments
-                    .map(a => currentStyle.operations.find(o => o.id === a.operationId))
-                    .filter(Boolean) as typeof currentStyle.operations;
+                    .map(a => style.operations.find(o => o.id === a.operationId))
+                    .filter(Boolean) as typeof style.operations;
 
                 candidates.sort((a, b) => {
                     const getInventoryScore = (op: typeof style.operations[0]) => {
-                        const currentInv = currentInventory.get(op.id) || 0;
-                        const succs = currentSuccessors.get(op.id) || [];
-                        const isFinal = !currentSuccessors.has(op.id) || currentSuccessors.get(op.id)!.length === 0;
+                        const currentInv = meta.inventory.get(op.id) || 0;
+                        const succs = meta.successors.get(op.id) || [];
+                        const isFinal = !meta.successors.has(op.id) || meta.successors.get(op.id)!.length === 0;
+                        const opWipCap = meta.wipCaps.get(op.id) || 15;
 
-                        const successorBlocked = succs.some(sId => (currentInventory.get(sId) || 0) > 15);
-                        if (successorBlocked) return 2;
-                        if (!isFinal && currentInv < 15) return 0;
+                        const successorBlocked = succs.some(sId => {
+                            if (meta.finalOperationIds.has(sId)) return false;
+                            const succCap = meta.wipCaps.get(sId) || 15;
+                            return (meta.inventory.get(sId) || 0) >= succCap;
+                        });
+
+                        if (successorBlocked) return 4;
+                        if (!isFinal && currentInv >= opWipCap) return 3;
+                        if (!isFinal && currentInv < Math.max(4, Math.floor(opWipCap * 0.4))) return 0;
                         return 1;
                     };
 
@@ -310,130 +365,139 @@ export const simulateProductionSchedule = (
                     const bInv = getInventoryScore(b);
                     if (aInv !== bInv) return aInv - bInv;
 
-                    const getComplianceScore = (op: typeof style.operations[0]) => {
-                        const target = currentTargetRatios.get(user.id)?.get(op.id) || 0;
-                        if (target <= 0.01) return 1000;
-                        const processedMap = currentUserProcessedCounts.get(user.id);
-                        const currentPcs = processedMap?.get(op.id) || 0;
-                        const smv = op.smv / 60;
-                        const eff = (user.efficiencyRating || 100) / 100;
-                        const minsSpent = (currentPcs * smv) / eff;
-                        let totalMins = 0;
-                        if (processedMap) {
-                            processedMap.forEach((cnt, oid) => {
-                                const obj = currentStyle.operations.find(o => o.id === oid);
-                                if (obj) totalMins += (cnt * (obj.smv / 60)) / eff;
-                            });
-                        }
-                        const currentShare = totalMins > 0 ? minsSpent / totalMins : 0;
-                        return currentShare / target;
-                    };
-
-                    const aRatio = getComplianceScore(a);
-                    const bRatio = getComplianceScore(b);
-
-                    // Stickiness Bias: Prefer the same operation to avoid switch delay
-                    // Effectively "discount" the ratio of the current op to make it more attractive
-                    const lastOpId = operatorLastOpId.get(user.id);
-                    const STICKINESS_BIAS = 0.15; // Prefer current task unless other is >15% more urgent
-
-                    let effA = aRatio;
-                    let effB = bRatio;
-
-                    if (lastOpId) {
-                        if (a.id === lastOpId) effA -= STICKINESS_BIAS;
-                        if (b.id === lastOpId) effB -= STICKINESS_BIAS;
-                    }
-
-                    // Use effective ratios for comparison
-                    if (Math.abs(effA - effB) > 0.1) return effA - effB;
-
-                    return currentStyle.operations.indexOf(a) - currentStyle.operations.indexOf(b);
+                    // Simple score
+                    return style.operations.indexOf(a) - style.operations.indexOf(b);
                 });
 
+                let assigned = false;
                 for (const op of candidates) {
+                    const succs = meta.successors.get(op.id) || [];
+                    const isFinal = succs.length === 0;
+                    const ownInventory = meta.inventory.get(op.id) || 0;
+                    const opWipCap = meta.wipCaps.get(op.id) || 15;
+                    const downstreamBlocked = succs.some(sId => {
+                        if (meta.finalOperationIds.has(sId)) return false;
+                        const succCap = meta.wipCaps.get(sId) || 15;
+                        return (meta.inventory.get(sId) || 0) >= succCap;
+                    });
+
+                    // Pull-based flow control:
+                    // 1) don't keep feeding downstream stations when they are WIP-saturated
+                    // 2) don't overbuild intermediate inventory beyond op-specific cap
+                    if (downstreamBlocked) continue;
+                    if (!isFinal && ownInventory >= opWipCap) continue;
+
                     const mType = op.machineType.trim();
                     const mUsed = machineUsage.get(mType) || 0;
                     const mTotal = machineCounts[mType] || 1;
                     if (mUsed >= mTotal) continue;
 
                     let maxInput = Infinity;
-                    const deps = currentEffectiveDependencies.get(op.id) || [];
+                    const deps = meta.effectiveDependencies.get(op.id) || [];
                     if (deps.length > 0) {
-                        const inputs = deps.map(d => currentInventory.get(d) || 0);
+                        const inputs = deps.map(d => meta.inventory.get(d) || 0);
                         maxInput = Math.min(...inputs);
                     }
-                    const leftToMake = currentRemainingTargets.get(op.id) || 0;
+                    const leftToMake = meta.remainingTargets.get(op.id) || 0;
                     if (leftToMake <= 0) continue;
                     if (maxInput > leftToMake) maxInput = leftToMake;
                     if (maxInput <= 0 && deps.length > 0) continue;
 
-                    const MIN_BATCH = 5; // Reduced from 10 to allow flow
-                    const isEndOfShift = (endCheck - t) < 60; // Use individual endCheck
-                    if (maxInput < MIN_BATCH && !isEndOfShift && deps.length) continue;
+                    const MIN_BATCH = 5;
+                    const isEndOfShift = (endCheck - t) < 60;
 
-                    const efficiency = (user.efficiencyRating || 100) / 100;
-                    const smvMinutes = op.smv / 60;
-                    const minutesPerPc = smvMinutes / efficiency;
+                    // Check if upstream operations are finished producing
+                    const upstreamFinished = deps.every(dId => (meta.remainingTargets.get(dId) || 0) <= 0);
 
-                    const rawTarget = Math.floor(20 / minutesPerPc);
-                    const targetPcs = Math.max(10, Math.min(100, rawTarget));
+                    if (maxInput < MIN_BATCH && !isEndOfShift && !upstreamFinished && deps.length) continue;
+
+                    const efficiency =
+                        ((user.efficiencyRating || 100) / 100) *
+                        getHistoricalMultiplier(historicalPerformance, user.id, op.id);
+                    const boundedEfficiency = clamp(efficiency, 0.45, 1.8);
+                    const smvMinutes = op.smv / 60; // Treated as minutes directly
+                    const minutesPerPc = smvMinutes / boundedEfficiency;
+                    const rawTarget = Math.floor(60 / minutesPerPc); // Target per Hour (was 20? 20 mins? No, usually hourly target)
+                    // Wait, rawTarget logic was '20 / minutesPerPc'. 
+                    // If 20 means "20 minutes batch", then okay.
+                    // But standard is Minutes.
+                    // Let's keep original logic for target, just fix SMV unit.
+                    const rawTargetBatch = Math.floor(20 / minutesPerPc); // Batch for 20 mins?
+                    const targetPcs = Math.max(10, Math.min(100, rawTargetBatch));
                     const actualPcs = Math.min(maxInput, targetPcs);
+                    if (actualPcs <= 0) continue;
 
-                    // Determine Switch Delay
+                    // Reserve target immediately to avoid over-allocation from concurrent claims.
+                    const remainingBefore = meta.remainingTargets.get(op.id) || 0;
+                    if (remainingBefore <= 0) continue;
+                    const reservedPcs = Math.min(actualPcs, remainingBefore);
+                    if (reservedPcs <= 0) continue;
+                    meta.remainingTargets.set(op.id, Math.max(0, remainingBefore - reservedPcs));
+
+                    // Switch Delay
                     const lastType = operatorLastMachine.get(user.id);
                     const lastOpId = operatorLastOpId.get(user.id);
+                    const lastColor = operatorLastColor.get(user.id);
                     let delay = 0;
+                    const currentColor = style.colorVariant;
 
-                    // Apply delay if Machine Type changes OR Operation changes
                     if (lastType && (lastType !== mType || (lastOpId && lastOpId !== op.id))) {
+                        delay = switchDelay;
+                    } else if (lastColor && currentColor && lastColor !== currentColor) {
                         delay = switchDelay;
                     }
 
-                    const duration = (actualPcs * minutesPerPc) + delay;
-
-                    // Ensure task does not exceed operator's shift end (soft stop, or hard stop?)
-                    // For now, allow finishing the task if started.
+                    const duration = (reservedPcs * minutesPerPc) + delay;
 
                     opState.set(user.id, {
                         busyUntil: t + duration,
                         opId: op.id,
                         startTick: t + delay,
-                        count: actualPcs,
-                        isNextStyle: isNext
+                        count: reservedPcs,
+                        styleIndex: sIdx,
+                        colorVariant: currentColor
                     });
 
                     machineUsage.set(mType, mUsed + 1);
                     operatorLastMachine.set(user.id, mType);
                     operatorLastOpId.set(user.id, op.id);
+                    // Note: Color is updated on release to handle delays correctly for next task? 
+                    // No, update here too for immediate sequential checks if needed, but standard is on-assign or on-complete.
+                    // Doing it on-assign is safer for "current state".
+                    if (currentColor) operatorLastColor.set(user.id, currentColor);
 
                     if (deps.length > 0) {
                         deps.forEach(d => {
-                            const cur = currentInventory.get(d) || 0;
-                            currentInventory.set(d, cur - actualPcs);
+                            const cur = meta.inventory.get(d) || 0;
+                            meta.inventory.set(d, cur - reservedPcs);
                         });
                     }
 
-                    const styleLabel = isNext ? "(NEXT)" : "";
-                    const delayMsg = delay > 0 ? `(Delay ${delay}m)` : "";
-                    log(`T=${t.toFixed(0)} CLAIM ${user.name} ${mType}. Task: ${op.name} ${styleLabel}. Batch: ${actualPcs}. ${delayMsg}`);
-                    return true;
+                    assigned = true;
+                    const styleTag = sIdx > 0 ? ' (NEXT)' : '';
+                    log(`T=${t.toFixed(0)} CLAIM ${user.name} ${mType}. Task: ${op.name} (S${sIdx})${styleTag}. Batch: ${reservedPcs}.`);
+                    break;
                 }
-                return false;
-            };
-
-            if (!tryAssign(
-                style, assignments, inventory, remainingTargets, successors,
-                effectiveDependencies, targetRatios, userProcessedCounts, false
-            )) {
-                if (nextStyle && nextAssignments) {
-                    tryAssign(
-                        nextStyle, nextAssignments, nextInventory, nextRemainingTargets, nextSuccessors,
-                        nextEffectiveDependencies, nextTargetRatios, nextUserProcessedCounts, true
-                    );
-                }
+                if (assigned) break; // Move to next operator
             }
         });
+
+        // Loop End Check
+        // Are all targets met?
+        const allPending = styles.every((s, i) => {
+            const meta = styleMeta[i];
+            return s.operations.every(op => {
+                const rem = meta.remainingTargets.get(op.id) || 0;
+                return rem <= 0;
+            });
+        });
+
+        const allBusy = opState.size > 0;
+
+        if (allPending && !allBusy) {
+            log(`SIM FINISHED EARLY at T=${t}. Targets met.`);
+            break;
+        }
     }
 
     log(`SIM COMPLETE. Processed ${maxSimulationTicks} ticks.`);
@@ -448,17 +512,41 @@ export const solveFluidCapacity = (
     operators: Operator[],
     machineCounts: Record<string, number>,
     availableMinutes: number,
-    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {}
+    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {},
+    historicalPerformance: HistoricalPerformanceMap = {}
 ) => {
     // 1. Initialize Weights (Proportional to SMV)
     // Map<OperatorId, Map<OpId, number>> (0.0 to 1.0)
     const opWeights = new Map<string, Map<string, number>>();
 
+    const operatorMinutes = new Map<string, number>();
+    operators.forEach(o => {
+        operatorMinutes.set(o.id, getOperatorMinutes(availableMinutes, operatorAttendance[o.id]));
+    });
+
+    const sharedCapacityShares = new Map<string, Map<string, number>>();
+    assignments.forEach(a => {
+        const totalCapacity = a.operatorIds.reduce((sum, uid) => {
+            return sum + (operatorMinutes.get(uid) || 0);
+        }, 0);
+        const perOpShares = new Map<string, number>();
+        a.operatorIds.forEach(uid => {
+            const share = totalCapacity > 0 ? (operatorMinutes.get(uid) || 0) / totalCapacity : 0;
+            perOpShares.set(uid, share || 0);
+        });
+        sharedCapacityShares.set(a.operationId, perOpShares);
+    });
+
     assignments.forEach(a => {
         a.operatorIds.forEach(uid => {
             if (!opWeights.has(uid)) opWeights.set(uid, new Map());
             const op = style.operations.find(o => o.id === a.operationId);
-            if (op) opWeights.get(uid)!.set(a.operationId, op.smv);
+            if (op) {
+                const capacityShare = sharedCapacityShares.get(a.operationId)?.get(uid) || 0;
+                const perfMultiplier = getHistoricalMultiplier(historicalPerformance, uid, op.id);
+                const seedWeight = op.smv * Math.max(0.05, capacityShare) * perfMultiplier;
+                opWeights.get(uid)!.set(a.operationId, seedWeight);
+            }
         });
     });
 
@@ -474,28 +562,6 @@ export const solveFluidCapacity = (
     // The current logic balances based on 'hCap' which includes minutes, but the *distribution* 
     // of work (weights) is currently just SMV based.
     // If Bob has 2x time, he should get more work if he is shared on an operation.
-
-    // For shared operations, adjust weights based on available capacity
-    const opCapacity = new Map<string, number>();
-    operators.forEach(o => {
-        const att = operatorAttendance[o.id] || { startDelay: 0, shiftExtension: 0 };
-        opCapacity.set(o.id, Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0)));
-    });
-
-    // Re-distribute shared weights
-    assignments.forEach(a => {
-        if (a.operatorIds.length > 1) {
-            const totalCap = a.operatorIds.reduce((sum, uid) => sum + (opCapacity.get(uid) || 0), 0);
-            if (totalCap > 0) {
-                a.operatorIds.forEach(uid => {
-                    const share = (opCapacity.get(uid) || 0) / totalCap;
-                    // This is a simplification. Real balancing happens in loop. 
-                    // But initial weights should reflect capacity.
-                    // opWeights.get(uid)?.set(a.operationId, ...);
-                });
-            }
-        }
-    });
 
     // 2. Iterative Balancing (Fluid Dynamics)
     const ITERATIONS = 20;
@@ -514,14 +580,15 @@ export const solveFluidCapacity = (
                 const weight = opWeights.get(uid)?.get(op.id) || 0;
 
                 // Calculate effective available minutes for this user
-                const att = operatorAttendance[user?.id || ""] || { startDelay: 0, shiftExtension: 0 };
-                const userMinutes = Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0));
+                const userMinutes = operatorMinutes.get(user?.id || '') || 0;
 
                 if (user && weight > 0) {
+                    const learnedSpeed = getHistoricalMultiplier(historicalPerformance, uid, op.id);
+                    const effectiveEfficiency = clamp(((user.efficiencyRating || 100) / 100) * learnedSpeed, 0.45, 1.8);
                     // Mins contributed = Avail * Weight
                     // Pcs = Mins / (OpSMV / 60)
                     // console.log(`User ${user.name} Minutes: ${userMinutes}. Weight: ${weight}`);
-                    hCap += ((user.efficiencyRating || 100) / 100 * userMinutes * weight) / (op.smv / 60);
+                    hCap += (effectiveEfficiency * userMinutes * weight) / (op.smv / 60);
                 }
             });
 
@@ -590,10 +657,11 @@ export const solveFluidCapacity = (
                 const weight = opWeights.get(uid)?.get(op.id) || 0;
                 finalWeights.set(uid, weight);
 
-                const att = operatorAttendance[user.id] || { startDelay: 0, shiftExtension: 0 };
-                const userMinutes = Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0));
+                const userMinutes = operatorMinutes.get(user.id) || 0;
+                const learnedSpeed = getHistoricalMultiplier(historicalPerformance, uid, op.id);
+                const effectiveEfficiency = clamp(((user.efficiencyRating || 100) / 100) * learnedSpeed, 0.45, 1.8);
 
-                hCap += ((user.efficiencyRating || 100) / 100 * userMinutes * weight) / (op.smv / 60);
+                hCap += (effectiveEfficiency * userMinutes * weight) / (op.smv / 60);
             }
         });
 

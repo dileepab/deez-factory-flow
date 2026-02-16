@@ -19,15 +19,26 @@ interface DailyTimelineProps {
     selectedNextStyle?: GarmentStyle; // Support Next Style
     flowMetrics: Record<string, any>;
     availableMinutes: number;
-    schedule?: Record<string, { start: number, end: number, opId: string, count: number, completed?: boolean }[]>;
+    schedule?: Record<string, { start: number, end: number, opId: string, count: number, completed?: boolean, styleIndex?: number, colorVariant?: string }[]>;
     productionLogs?: ProductionEntry[]; // Optional logs
+    isOrderComplete?: boolean;
     switchDelay?: number;
 }
 
-export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule, productionLogs = [], switchDelay = 0 }: DailyTimelineProps) {
+export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule, productionLogs = [], isOrderComplete = false, switchDelay = 0 }: DailyTimelineProps) {
     const { user } = useAuth();
     // State for Mobile Tooltips
     const [openTooltipId, setOpenTooltipId] = useState<string | null>(null);
+
+    // Calculate Max Production Time
+    let productionEndTime = 0;
+    if (schedule) {
+        Object.values(schedule).forEach(events => {
+            events.forEach(e => {
+                if (e.end > productionEndTime) productionEndTime = e.end;
+            });
+        });
+    }
 
     // Colors for operations to distinguish them (Hex for reliability)
     const OP_COLORS = [
@@ -52,6 +63,95 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
             isNext = true;
         }
         return { op, isNext };
+    };
+
+    const getSegmentStyleLabel = (isNextStyle: boolean, colorVariant?: string) => {
+        const style = isNextStyle ? selectedNextStyle : selectedStyle;
+        if (!style) return '';
+        const variant = colorVariant || style.colorVariant;
+        return variant ? `${style.name} - ${variant}` : style.name;
+    };
+
+    const getOperatorWeightForOperation = (operationId: string, operatorId: string): number | undefined => {
+        const weights = flowMetrics?.[operationId]?.operatorWeights;
+        if (weights instanceof Map) {
+            const value = weights.get(operatorId);
+            return typeof value === 'number' && isFinite(value) ? value : undefined;
+        }
+        if (weights && typeof weights === 'object') {
+            const value = (weights as Record<string, number>)[operatorId];
+            return typeof value === 'number' && isFinite(value) ? value : undefined;
+        }
+        return undefined;
+    };
+
+    const splitQuantityByOperators = (operationId: string, operatorIds: string[], quantity: number) => {
+        const totalQty = Math.max(0, Math.round(quantity));
+        if (operatorIds.length === 0) return [] as { operatorName: string, qty: number }[];
+
+        const rawWeights = operatorIds.map(uid => {
+            const w = getOperatorWeightForOperation(operationId, uid);
+            return typeof w === 'number' && w > 0 ? w : 0;
+        });
+
+        const hasWeightedData = rawWeights.some(w => w > 0);
+        const weights = hasWeightedData ? rawWeights : operatorIds.map(() => 1);
+        const weightSum = weights.reduce((sum, w) => sum + w, 0) || operatorIds.length;
+
+        const exactShares = weights.map(w => (w / weightSum) * totalQty);
+        const baseShares = exactShares.map(v => Math.floor(v));
+        let remainder = totalQty - baseShares.reduce((sum, v) => sum + v, 0);
+
+        const fractions = exactShares
+            .map((value, idx) => ({ idx, frac: value - baseShares[idx] }))
+            .sort((a, b) => b.frac - a.frac);
+
+        let cursor = 0;
+        while (remainder > 0 && fractions.length > 0) {
+            const index = fractions[cursor % fractions.length].idx;
+            baseShares[index] += 1;
+            remainder -= 1;
+            cursor += 1;
+        }
+
+        return operatorIds.map((uid, idx) => ({
+            operatorName: assignedOperators.find(op => op.id === uid)?.name || uid,
+            qty: baseShares[idx] || 0
+        }));
+    };
+
+    const getHandoffMessage = (opId: string, isNextStyle: boolean, segmentCount: number, fromOperatorName?: string) => {
+        const style = isNextStyle ? selectedNextStyle : selectedStyle;
+        if (!style) return '';
+
+        const qty = Math.max(0, Math.round(segmentCount));
+        const currentOperation = style.operations.find(op => op.id === opId);
+        const fromOperationName = currentOperation?.name || 'Current Operation';
+        const isStartOperation = !currentOperation?.dependencies || currentOperation.dependencies.length === 0;
+        const fromLabel = isStartOperation
+            ? 'Cutting/Store'
+            : (fromOperatorName ? `${fromOperatorName} (${fromOperationName})` : fromOperationName);
+        const downstreamOps = style.operations.filter(op => (op.dependencies || []).includes(opId));
+        if (downstreamOps.length === 0) {
+            return `From ${fromLabel}: send ${qty} pcs to Final QC / Finished Goods.`;
+        }
+
+        const targets = downstreamOps.map(nextOp => {
+            const assignment = assignments.find(a => a.operationId === nextOp.id);
+            const downstreamOperatorIds = assignment?.operatorIds || [];
+            if (downstreamOperatorIds.length === 0) return `${nextOp.name}: ${qty} pcs (Unassigned)`;
+
+            const distribution = splitQuantityByOperators(nextOp.id, downstreamOperatorIds, qty);
+            const detail = distribution
+                .map(item => `${item.operatorName} ${item.qty} pcs`)
+                .join(', ');
+            return `${nextOp.name}: ${detail}`;
+        });
+
+        if (targets.length === 1) {
+            return `From ${fromLabel}: send to ${targets[0]}.`;
+        }
+        return `From ${fromLabel}: split handoff -> ${targets.join(' | ')}.`;
     };
 
     // SHIFT CONFIGURATION
@@ -215,6 +315,16 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                             {Math.round(seg.count)} pcs
                                         </span>
                                     </div>
+                                    {seg.styleLabel && (
+                                        <div className="mb-1.5 text-[10px] text-muted-foreground">
+                                            {seg.styleLabel}
+                                        </div>
+                                    )}
+                                    {seg.handoffMessage && (
+                                        <div className="mb-1.5 text-[10px] text-emerald-700 bg-emerald-50 border border-emerald-100 rounded px-2 py-1">
+                                            {seg.handoffMessage}
+                                        </div>
+                                    )}
 
                                     <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
                                         <div className="flex items-center gap-1.5">
@@ -334,6 +444,8 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                     type: 'task',
                                                     color,
                                                     name: op.name,
+                                                    styleLabel: getSegmentStyleLabel(isNext, ev.colorVariant),
+                                                    handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name),
                                                     count: partCount,
                                                     start: cwStart,
                                                     end: cwEnd,
@@ -396,6 +508,18 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                             <span className="text-[10px] font-bold text-gray-500 rotate-0 md:-rotate-90 transform origin-center whitespace-nowrap opacity-70">{b.name}</span>
                                         </div>
                                     ))}
+
+                                    {/* Production Complete Line */}
+                                    {productionEndTime > 0 && mapWorkEnd(productionEndTime) < (TOTAL_SHIFT_MINUTES - 30) && (
+                                        <div
+                                            className={`absolute top-0 bottom-0 border-l-2 border-dashed z-30 flex flex-col justify-end pb-2 pl-1 ${isOrderComplete ? 'border-emerald-500' : 'border-amber-500'}`}
+                                            style={{ left: `${(mapWorkEnd(productionEndTime) / TOTAL_SHIFT_MINUTES) * 100}%` }}
+                                        >
+                                            <span className={`text-[10px] font-bold bg-white/90 px-1 py-0.5 rounded shadow-sm whitespace-nowrap border ${isOrderComplete ? 'text-emerald-600 border-emerald-200' : 'text-amber-700 border-amber-200'}`}>
+                                                {isOrderComplete ? 'Production Complete' : 'Planned Work Ends'} ({formatTime(mapWorkEnd(productionEndTime))})
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
 
                                 {/* Time Ruler */}
@@ -423,7 +547,16 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                 </div>
 
                                 {assignedOperators.map(user => {
-                                    let segments: { color: string, name: string, count: number, start: number, end: number, isGap: boolean }[] = [];
+                                    let segments: {
+                                        color: string,
+                                        name: string,
+                                        count: number,
+                                        start: number,
+                                        end: number,
+                                        isGap: boolean,
+                                        styleLabel?: string,
+                                        handoffMessage?: string
+                                    }[] = [];
 
                                     if (schedule && schedule[user.id]) {
                                         const rawEvents = schedule[user.id];
@@ -463,7 +596,16 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                     const totalDur = ev.end - ev.start;
                                                     const partDur = part.end - part.start;
                                                     const partCount = (partDur / totalDur) * ev.count;
-                                                    segments.push({ color, name: op.name, count: partCount, start: wallStart, end: wallEnd, isGap: false });
+                                                    segments.push({
+                                                        color,
+                                                        name: op.name,
+                                                        styleLabel: getSegmentStyleLabel(isNext, ev.colorVariant),
+                                                        handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name),
+                                                        count: partCount,
+                                                        start: wallStart,
+                                                        end: wallEnd,
+                                                        isGap: false
+                                                    });
                                                 });
                                             }
                                             cursor = Math.max(cursor, ev.end);
@@ -535,6 +677,12 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                             </TooltipTrigger>
                                                             <TooltipContent className="text-xs !bg-white !text-slate-900 border border-slate-200 shadow-md p-2 z-50">
                                                                 <div className="font-bold mb-1">{seg.name}</div>
+                                                                {seg.styleLabel && (
+                                                                    <div className="text-[10px] mb-1 text-slate-500">{seg.styleLabel}</div>
+                                                                )}
+                                                                {seg.handoffMessage && (
+                                                                    <div className="text-[10px] mb-1 text-emerald-700">{seg.handoffMessage}</div>
+                                                                )}
                                                                 <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 opacity-90">
                                                                     <span>Count:</span> <span className="font-mono font-bold">{Math.round(seg.count)}</span>
                                                                     <span>Start:</span> <span className="font-mono">{formatTime(seg.start)}</span>

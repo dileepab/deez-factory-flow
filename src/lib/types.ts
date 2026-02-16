@@ -87,6 +87,8 @@ export interface GarmentStyle {
     quantity: number;
     status: 'active' | 'completed';
     startDate: string;
+    colorVariant?: string; // Optional color variant (e.g. "Red", "Blue")
+    variants?: { id: string; color: string; quantity: number }[]; // Multi-variant support
 }
 
 
