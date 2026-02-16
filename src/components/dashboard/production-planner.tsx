@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
     Card,
     CardContent,
@@ -30,7 +30,7 @@ import { useCollection } from '@/firebase/firestore/use-collection';
 import { useConfiguration } from '@/firebase/firestore/use-configuration';
 import { collection, query, where } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
-import type { GarmentStyle, Operator, AnyUser, Assignment } from '@/lib/types';
+import type { GarmentStyle, Operator, AnyUser, Assignment, ProductionEntry } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { useMachineTypes } from '@/hooks/use-machine-types';
 import { Loader2, UserPlus, X, CheckCircle2, AlertCircle, Wand2, ClipboardList, RefreshCcw } from 'lucide-react';
@@ -39,12 +39,12 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MultiSelect, Option } from '@/components/ui/multi-select';
 import { DailyTimeline } from './daily-timeline';
-import { simulateProductionSchedule, solveFluidCapacity, unique } from '@/lib/simulation-engine';
+import { simulateProductionSchedule, solveFluidCapacity, unique, type HistoricalPerformanceMap } from '@/lib/simulation-engine';
 import { useAuth } from "@/auth-provider";
 import { useToast } from "@/hooks/use-toast";
 import { doc, setDoc, Timestamp } from "firebase/firestore";
 import type { DailyPlan, ScheduleSegment } from "@/lib/types";
-import { format } from "date-fns";
+import { format, startOfDay, subDays } from "date-fns";
 import { Save, CalendarClock } from "lucide-react";
 
 // Helper function to calculate output from simulation event
@@ -103,6 +103,43 @@ export function generateOperatorAdvice(
     };
 }
 
+const SHIFT_START_MINUTES = (7 * 60) + 30;
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
+const parseHourlyRangeMinutes = (range: string | undefined): number => {
+    if (!range) return 0;
+    const [startStr, endStr] = range.split(' - ');
+    if (!startStr || !endStr) return 0;
+    const [startH, startM] = startStr.split(':').map(Number);
+    const [endH, endM] = endStr.split(':').map(Number);
+    if ([startH, startM, endH, endM].some(v => Number.isNaN(v))) return 0;
+    return Math.max(0, ((endH * 60) + endM) - ((startH * 60) + startM));
+};
+
+const scaleHistoricalPerformance = (
+    base: HistoricalPerformanceMap,
+    factor: number
+): HistoricalPerformanceMap => {
+    const scaled: HistoricalPerformanceMap = {};
+    Object.entries(base).forEach(([operatorId, opMap]) => {
+        scaled[operatorId] = {};
+        Object.entries(opMap).forEach(([opId, multiplier]) => {
+            scaled[operatorId][opId] = clamp(multiplier * factor, 0.6, 1.6);
+        });
+    });
+    return scaled;
+};
+
+const PLANNING_OBJECTIVE_WEIGHTS = {
+    throughput: 100,
+    starvation: 28,
+    fragmentation: 12,
+    shortDuration: 8,
+    machineOverflow: 40,
+    multitask: 10,
+} as const;
+
 
 
 export function ProductionPlanner(): React.ReactNode {
@@ -130,6 +167,9 @@ export function ProductionPlanner(): React.ReactNode {
     const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
     const [operatorAttendance, setOperatorAttendance] = useState<Record<string, { startDelay: number, shiftExtension: number }>>({});
     const [shiftStartTime, setShiftStartTime] = useState<string>("07:30");
+    const [enableRollingReplan, setEnableRollingReplan] = useState<boolean>(true);
+    const [replanIntervalMinutes, setReplanIntervalMinutes] = useState<number>(60);
+    const [lastReplanAt, setLastReplanAt] = useState<Date | null>(null);
 
     // Queries
     const stylesQuery = useMemoFirebase(
@@ -144,13 +184,130 @@ export function ProductionPlanner(): React.ReactNode {
     );
     const { data: allOperators, isLoading: operatorsLoading } = useCollection<AnyUser>(operatorsQuery);
 
+    const todayStart = useMemo(() => startOfDay(new Date()), []);
+    const recentStart = useMemo(() => subDays(startOfDay(new Date()), 30), []);
+
+    const todayProductionQuery = useMemoFirebase(
+        () => query(collection(firestore, 'production'), where('timestamp', '>=', Timestamp.fromDate(todayStart))),
+        [todayStart]
+    );
+    const { data: todayProductionLogs } = useCollection<ProductionEntry>(todayProductionQuery);
+
+    const historicalProductionQuery = useMemoFirebase(
+        () => query(collection(firestore, 'production'), where('timestamp', '>=', Timestamp.fromDate(recentStart))),
+        [recentStart]
+    );
+    const { data: historicalProductionLogs } = useCollection<ProductionEntry>(historicalProductionQuery);
+
     // Cast to Operator type safely
     const operators = useMemo(() =>
         (allOperators || []).filter(u => u.role === 'operator') as Operator[],
         [allOperators]);
 
-    const selectedStyle = styles?.find(s => s.id === selectedStyleId);
-    const selectedNextStyle = styles?.find(s => s.id === selectedNextStyleId); // NEW: Next Style Object
+    const selectedStyleRaw = styles?.find(s => s.id === selectedStyleId);
+    const selectedNextStyleRaw = styles?.find(s => s.id === selectedNextStyleId); // NEW: Next Style Object
+
+    const completedByStyleAndOp = useMemo(() => {
+        const map: Record<string, Record<string, number>> = {};
+        (todayProductionLogs || []).forEach(entry => {
+            if (!entry.styleId || !entry.operationId) return;
+            if (!map[entry.styleId]) map[entry.styleId] = {};
+            map[entry.styleId][entry.operationId] = (map[entry.styleId][entry.operationId] || 0) + (entry.cumulativeQuantity || 0);
+        });
+        return map;
+    }, [todayProductionLogs]);
+
+    const applyLiveProgressToStyle = useCallback((style: GarmentStyle | undefined) => {
+        if (!style) return undefined;
+        const styleProgress = completedByStyleAndOp[style.id] || {};
+        return {
+            ...style,
+            operations: style.operations.map(op => ({
+                ...op,
+                // Keep persisted cumulative progress as baseline and only elevate with fresh in-day logs.
+                completedQuantity: Math.max(op.completedQuantity || 0, styleProgress[op.id] || 0),
+            })),
+        } satisfies GarmentStyle;
+    }, [completedByStyleAndOp]);
+
+    const selectedStyle = useMemo(
+        () => applyLiveProgressToStyle(selectedStyleRaw),
+        [selectedStyleRaw, applyLiveProgressToStyle]
+    );
+    const selectedNextStyle = useMemo(
+        () => applyLiveProgressToStyle(selectedNextStyleRaw),
+        [selectedNextStyleRaw, applyLiveProgressToStyle]
+    );
+
+    const getStyleCompletedUnits = useCallback((style: GarmentStyle | undefined): number => {
+        if (!style || !style.operations.length) return 0;
+        const deps = new Set(style.operations.flatMap(op => op.dependencies || []));
+        const finalOps = style.operations.filter(op => !deps.has(op.id));
+        if (finalOps.length === 0) return 0;
+        return Math.min(...finalOps.map(op => op.completedQuantity || 0));
+    }, []);
+
+    const remainingPrimaryQty = useMemo(() => {
+        if (!selectedStyle) return 0;
+        const completed = getStyleCompletedUnits(selectedStyle);
+        return Math.max(0, (selectedStyle.quantity || 0) - completed);
+    }, [selectedStyle, getStyleCompletedUnits]);
+
+    const remainingNextQty = useMemo(() => {
+        if (!selectedNextStyle) return 0;
+        const completed = getStyleCompletedUnits(selectedNextStyle);
+        return Math.max(0, (selectedNextStyle.quantity || 0) - completed);
+    }, [selectedNextStyle, getStyleCompletedUnits]);
+
+    const operationSmvIndex = useMemo(() => {
+        const index: Record<string, number> = {};
+        (styles || []).forEach(style => {
+            style.operations.forEach(op => {
+                index[op.id] = Number(op.smv) || 0;
+            });
+        });
+        return index;
+    }, [styles]);
+
+    const learnedPerformance = useMemo<HistoricalPerformanceMap>(() => {
+        type PerfAccumulator = { weightedRatio: number; weight: number };
+        const accum: Record<string, Record<string, PerfAccumulator>> = {};
+
+        (historicalProductionLogs || []).forEach(log => {
+            const smvSeconds = operationSmvIndex[log.operationId];
+            if (!smvSeconds || !log.operatorId || !log.operationId) return;
+
+            const duration = parseHourlyRangeMinutes(log.hourlyRange) || 60;
+            const qty = Math.max(0, log.cumulativeQuantity || 0);
+            if (duration <= 0 || qty <= 0) return;
+
+            const actualPiecesPerMin = qty / duration;
+            const standardPiecesPerMin = 60 / smvSeconds;
+            if (standardPiecesPerMin <= 0) return;
+
+            const ratio = clamp(actualPiecesPerMin / standardPiecesPerMin, 0.5, 1.8);
+            const weight = Math.max(1, qty);
+
+            if (!accum[log.operatorId]) accum[log.operatorId] = {};
+            if (!accum[log.operatorId][log.operationId]) {
+                accum[log.operatorId][log.operationId] = { weightedRatio: 0, weight: 0 };
+            }
+
+            accum[log.operatorId][log.operationId].weightedRatio += ratio * weight;
+            accum[log.operatorId][log.operationId].weight += weight;
+        });
+
+        const result: HistoricalPerformanceMap = {};
+        Object.entries(accum).forEach(([operatorId, opMap]) => {
+            result[operatorId] = {};
+            Object.entries(opMap).forEach(([opId, values]) => {
+                const avg = values.weight > 0 ? values.weightedRatio / values.weight : 1;
+                result[operatorId][opId] = clamp(avg, 0.6, 1.5);
+            });
+        });
+
+        return result;
+    }, [historicalProductionLogs, operationSmvIndex]);
 
     // Init machine counts when style changes
     // Init machine counts when style changes (Primary OR Next)
@@ -212,9 +369,25 @@ export function ProductionPlanner(): React.ReactNode {
             // Target = (Operators * Mins) / TotalSMV
             const count = availableOperatorIds.length;
             const calculatedTarget = (count * availableMinutes) / selectedStyle.totalSmv;
-            setDailyTarget(Math.floor(calculatedTarget));
+            const remainingOrders = selectedNextStyle
+                ? remainingPrimaryQty + remainingNextQty
+                : remainingPrimaryQty;
+            const hasOrderBound = (selectedStyle.quantity || 0) > 0 || (selectedNextStyle?.quantity || 0) > 0;
+            const boundedTarget = hasOrderBound
+                ? Math.min(calculatedTarget, Math.max(0, remainingOrders))
+                : calculatedTarget;
+
+            setDailyTarget(Math.max(0, Math.floor(boundedTarget)));
         }
-    }, [planningMode, availableOperatorIds, selectedStyle, availableMinutes]);
+    }, [
+        planningMode,
+        availableOperatorIds,
+        selectedStyle,
+        selectedNextStyle,
+        availableMinutes,
+        remainingPrimaryQty,
+        remainingNextQty
+    ]);
 
     // Clear assignments when style changes
     useEffect(() => {
@@ -252,7 +425,11 @@ export function ProductionPlanner(): React.ReactNode {
             const candidates = candidatesPool
                 .filter(o => o.skills?.includes(op.machineType.trim() as any)) // Use trimmed match
                 .filter(o => getLoad(newAssignments, o.id) < MAX_LOAD)
-                .sort((a, b) => (b.efficiencyRating || 100) - (a.efficiencyRating || 100));
+                .sort((a, b) => {
+                    const aScore = (a.efficiencyRating || 100) * (learnedPerformance[a.id]?.[op.id] || 1);
+                    const bScore = (b.efficiencyRating || 100) * (learnedPerformance[b.id]?.[op.id] || 1);
+                    return bScore - aScore;
+                });
 
             if (candidates.length > 0) {
                 const best = candidates[0];
@@ -264,7 +441,13 @@ export function ProductionPlanner(): React.ReactNode {
         // Helper to Calc Global Min (Flow Aware + Fluid Output)
         const calcGlobalMin = (assignMap: Map<string, string[]>) => {
             const assignArray = Array.from(assignMap.entries()).map(([k, v]) => ({ operationId: k, operatorIds: v }));
-            const solved = solveFluidCapacity(targetStyle, assignArray, operators, machineCounts, availableMinutes);
+            const solved = solveFluidCapacity(
+                targetStyle,
+                assignArray,
+                operators,
+                machineCounts,
+                availableMinutes
+            );
 
             // Dependence Prop
             const metrics = new Map<string, { effective: number, local: number }>();
@@ -305,8 +488,12 @@ export function ProductionPlanner(): React.ReactNode {
                     fragmentationPenalty += (count - 1) * 0.25;
                 }
             });
-
-            let score = min * (1 - (fragmentationPenalty * 0.1));
+            let multitaskPenalty = 0;
+            opLoads.forEach(count => {
+                if (count > 2) {
+                    multitaskPenalty += count - 2;
+                }
+            });
 
             // MIN DURATION PENALTY (< 30 mins)
             let minDurationPenalties = 0;
@@ -324,23 +511,29 @@ export function ProductionPlanner(): React.ReactNode {
                 }
             });
 
-            if (minDurationPenalties > 0) {
-                score -= (minDurationPenalties * 50);
-            }
-
             // MACHINE SHARING PENALTY
-            let sharingPenalties = 0;
+            let machineOverflowPenalty = 0;
             targetStyle.operations.forEach(op => {
                 const assignedCount = assignMap.get(op.id)?.length || 0;
                 const mCount = machineCounts[op.machineType] || 1;
                 if (assignedCount > mCount) {
-                    sharingPenalties += (assignedCount - mCount);
+                    machineOverflowPenalty += (assignedCount - mCount);
                 }
             });
 
-            if (sharingPenalties > 0) {
-                score -= (sharingPenalties * 500);
-            }
+            let starvationPenalty = 0;
+            metrics.forEach(({ effective, local }) => {
+                starvationPenalty += Math.max(0, local - effective);
+            });
+
+            const throughputScore = min;
+            const score =
+                (throughputScore * PLANNING_OBJECTIVE_WEIGHTS.throughput) -
+                (starvationPenalty * PLANNING_OBJECTIVE_WEIGHTS.starvation) -
+                (fragmentationPenalty * PLANNING_OBJECTIVE_WEIGHTS.fragmentation) -
+                (minDurationPenalties * PLANNING_OBJECTIVE_WEIGHTS.shortDuration) -
+                (machineOverflowPenalty * PLANNING_OBJECTIVE_WEIGHTS.machineOverflow) -
+                (multitaskPenalty * PLANNING_OBJECTIVE_WEIGHTS.multitask);
 
             return { min, score, botId, metrics };
         };
@@ -632,7 +825,13 @@ export function ProductionPlanner(): React.ReactNode {
 
         // Phase 4: Cleanup
         const cleanupAssignArr = Array.from(newAssignments.entries()).map(([k, v]) => ({ operationId: k, operatorIds: v }));
-        const cleanupSolved = solveFluidCapacity(targetStyle, cleanupAssignArr, operators, machineCounts, availableMinutes);
+        const cleanupSolved = solveFluidCapacity(
+            targetStyle,
+            cleanupAssignArr,
+            operators,
+            machineCounts,
+            availableMinutes
+        );
 
         cleanupSolved.forEach((res, opId) => {
             res.finalWeights.forEach((weight, uid) => {
@@ -650,14 +849,25 @@ export function ProductionPlanner(): React.ReactNode {
     };
 
     // Actual Auto Assign Handler
-    const handleAutoAssign = () => {
+    const handleAutoAssign = useCallback(() => {
         if (selectedStyle) {
             setAssignments(computeAssignments(selectedStyle));
         }
         if (selectedNextStyle) {
             setNextAssignments(computeAssignments(selectedNextStyle));
         }
-    };
+    }, [selectedStyle, selectedNextStyle, operators, availableOperatorIds, machineCounts, availableMinutes, operatorAttendance, learnedPerformance]);
+
+    useEffect(() => {
+        if (!enableRollingReplan || !selectedStyle) return;
+        const intervalMinutes = clamp(replanIntervalMinutes, 30, 180);
+        const timer = window.setInterval(() => {
+            handleAutoAssign();
+            setLastReplanAt(new Date());
+        }, intervalMinutes * 60 * 1000);
+
+        return () => window.clearInterval(timer);
+    }, [enableRollingReplan, replanIntervalMinutes, handleAutoAssign, selectedStyle?.id, selectedNextStyle?.id]);
 
     // Helper: Assign Operator (Supports both Primary and Next Style)
     const handleAssignOperator = (opId: string, operatorId: string) => {
@@ -742,7 +952,13 @@ export function ProductionPlanner(): React.ReactNode {
         if (!style) return {};
 
         // Use Fluid Solver to distribute operator capacity
-        const solved = solveFluidCapacity(style, assigns, operators, machineCounts, availableMinutes);
+        const solved = solveFluidCapacity(
+            style,
+            assigns,
+            operators,
+            machineCounts,
+            availableMinutes
+        );
 
         const metrics: Record<string, {
             localCapacity: number;
@@ -790,22 +1006,26 @@ export function ProductionPlanner(): React.ReactNode {
         return metrics;
     };
 
-    const flowMetrics = useMemo(() => calculateMetrics(selectedStyle, assignments), [selectedStyle, assignments, machineCounts, dailyTarget, availableMinutes, operators]);
-    const nextFlowMetrics = useMemo(() => calculateMetrics(selectedNextStyle, nextAssignments), [selectedNextStyle, nextAssignments, machineCounts, dailyTarget, availableMinutes, operators]);
+    const flowMetrics = useMemo(
+        () => calculateMetrics(selectedStyle, assignments),
+        [selectedStyle, assignments, machineCounts, dailyTarget, availableMinutes, operators, operatorAttendance, learnedPerformance]
+    );
+    const nextFlowMetrics = useMemo(
+        () => calculateMetrics(selectedNextStyle, nextAssignments),
+        [selectedNextStyle, nextAssignments, machineCounts, dailyTarget, availableMinutes, operators, operatorAttendance, learnedPerformance]
+    );
 
-    // Simulate Schedule for Visualization
-    const simResult = useMemo(() => {
-        if (!selectedStyle || assignments.length === 0) return { schedule: {}, logs: [] };
-
-        // Prepare Style List (Primary -> Next)
+    const buildSimulationInputs = useCallback((
+        primaryStyle: GarmentStyle,
+        primaryAssignments: Assignment[],
+        nextStyle?: GarmentStyle,
+        nextStyleAssignments: Assignment[] = []
+    ) => {
         const simulationStyles: GarmentStyle[] = [];
         const simulationAssignments: Assignment[][] = [];
-
-        // CAPACITY MODE FIX: Scale quantities to fill the day if needed
-        // Strict Mode: Do not scale quantities. User must add Next Style to fill capacity.
         const scalingFactor = 1;
 
-        const addStyle = (base: GarmentStyle, baseAssigns: Assignment[], isNext: boolean) => {
+        const addStyle = (base: GarmentStyle, baseAssigns: Assignment[]) => {
             if (base.variants && base.variants.length > 0) {
                 base.variants.forEach(variant => {
                     simulationStyles.push({
@@ -817,20 +1037,57 @@ export function ProductionPlanner(): React.ReactNode {
                     });
                     simulationAssignments.push(baseAssigns);
                 });
-            } else {
-                simulationStyles.push({
-                    ...base,
-                    quantity: Math.ceil((base.quantity || 1000) * scalingFactor)
-                });
-                simulationAssignments.push(baseAssigns);
+                return;
             }
+
+            simulationStyles.push({
+                ...base,
+                quantity: Math.ceil((base.quantity || 1000) * scalingFactor)
+            });
+            simulationAssignments.push(baseAssigns);
         };
 
-        addStyle(selectedStyle, assignments, false);
-        if (selectedNextStyle) addStyle(selectedNextStyle, nextAssignments, true);
+        addStyle(primaryStyle, primaryAssignments);
+        if (nextStyle) addStyle(nextStyle, nextStyleAssignments);
 
-        return simulateProductionSchedule(simulationStyles, simulationAssignments, operators, machineCounts, availableMinutes, switchDelay, operatorAttendance);
-    }, [selectedStyle, assignments, operators, machineCounts, availableMinutes, switchDelay, selectedNextStyle, nextAssignments, operatorAttendance, planningMode]);
+        return { simulationStyles, simulationAssignments };
+    }, []);
+
+    // Simulate Schedule for Visualization
+    const simResult = useMemo(() => {
+        if (!selectedStyle || assignments.length === 0) return { schedule: {}, logs: [] };
+
+        const { simulationStyles, simulationAssignments } = buildSimulationInputs(
+            selectedStyle,
+            assignments,
+            selectedNextStyle,
+            nextAssignments
+        );
+
+        return simulateProductionSchedule(
+            simulationStyles,
+            simulationAssignments,
+            operators,
+            machineCounts,
+            availableMinutes,
+            switchDelay,
+            operatorAttendance,
+            learnedPerformance
+        );
+    }, [
+        selectedStyle,
+        assignments,
+        selectedNextStyle,
+        nextAssignments,
+        operators,
+        machineCounts,
+        availableMinutes,
+        switchDelay,
+        operatorAttendance,
+        learnedPerformance,
+        buildSimulationInputs,
+        planningMode,
+    ]);
 
     // Global bottleneck: "Actual Output" derived from Simulation (Final Good Count)
     const bottleneckOutput = useMemo(() => {
@@ -851,12 +1108,6 @@ export function ProductionPlanner(): React.ReactNode {
         const primaryOpsOutput = new Map<string, number>();
         finalOps.forEach(op => primaryOpsOutput.set(op.id, 0));
 
-        console.log('DEBUG: bottleneckOutput Init', {
-            finalOps: finalOps.map(o => o.id),
-            primaryStyleCount: selectedStyle?.variants?.length || 1,
-            selectedStyleId: selectedStyle?.id
-        });
-
         const nextOpsOutput = new Map<string, number>();
         nextFinalOps.forEach(op => nextOpsOutput.set(op.id, 0));
 
@@ -872,10 +1123,21 @@ export function ProductionPlanner(): React.ReactNode {
 
         Object.values(simResult.schedule).forEach(events => {
             events.forEach(ev => {
+                const styleIndex = typeof ev.styleIndex === 'number' ? ev.styleIndex : 0;
+                const belongsPrimaryByOp = primaryOpsOutput.has(ev.opId);
+                const belongsNextByOp = nextOpsOutput.has(ev.opId);
+
+                const isPrimaryEvent =
+                    (typeof ev.styleIndex === 'number' && styleIndex < primaryStyleCount) ||
+                    (typeof ev.styleIndex !== 'number' && belongsPrimaryByOp && !belongsNextByOp);
+                const isNextEvent =
+                    (typeof ev.styleIndex === 'number' && styleIndex >= primaryStyleCount) ||
+                    (typeof ev.styleIndex !== 'number' && belongsNextByOp && !belongsPrimaryByOp);
+
                 // Accumulate for Primary Style Final Ops
                 if (primaryOpsOutput.has(ev.opId)) {
                     // Check if it belongs to Primary Style range
-                    if (ev.styleIndex < primaryStyleCount) {
+                    if (isPrimaryEvent) {
                         primaryOpsOutput.set(ev.opId, (primaryOpsOutput.get(ev.opId) || 0) + ev.count);
                     }
                 }
@@ -883,7 +1145,7 @@ export function ProductionPlanner(): React.ReactNode {
                 // Accumulate for Next Style Final Ops
                 if (nextOpsOutput.has(ev.opId)) {
                     // Check if it belongs to Next Style range
-                    if (ev.styleIndex >= primaryStyleCount) {
+                    if (isNextEvent) {
                         nextOpsOutput.set(ev.opId, (nextOpsOutput.get(ev.opId) || 0) + ev.count);
                     }
                 }
@@ -914,6 +1176,262 @@ export function ProductionPlanner(): React.ReactNode {
 
         return counts;
     }, [simResult.schedule]);
+
+    const calculateBottleneckForSchedule = useCallback((
+        primaryStyle: GarmentStyle | undefined,
+        nextStyle: GarmentStyle | undefined,
+        schedule: Record<string, { start: number, end: number, opId: string, count: number, styleIndex: number }[]>
+    ) => {
+        if (!primaryStyle) return { primary: 0, next: 0 };
+
+        const primaryDependencies = new Set(primaryStyle.operations.flatMap(op => op.dependencies || []));
+        const primaryFinalOps = primaryStyle.operations.filter(op => !primaryDependencies.has(op.id));
+
+        const nextDependencies = new Set((nextStyle?.operations || []).flatMap(op => op.dependencies || []));
+        const nextFinalOps = (nextStyle?.operations || []).filter(op => !nextDependencies.has(op.id));
+
+        const primaryTotals = new Map<string, number>();
+        primaryFinalOps.forEach(op => primaryTotals.set(op.id, 0));
+        const nextTotals = new Map<string, number>();
+        nextFinalOps.forEach(op => nextTotals.set(op.id, 0));
+
+        const primaryStyleCount = primaryStyle.variants?.length ? primaryStyle.variants.length : 1;
+
+        Object.values(schedule).forEach(events => {
+            events.forEach(event => {
+                const styleIndex = typeof event.styleIndex === 'number' ? event.styleIndex : 0;
+                const belongsPrimaryByOp = primaryTotals.has(event.opId);
+                const belongsNextByOp = nextTotals.has(event.opId);
+
+                const isPrimaryEvent =
+                    (typeof event.styleIndex === 'number' && styleIndex < primaryStyleCount) ||
+                    (typeof event.styleIndex !== 'number' && belongsPrimaryByOp && !belongsNextByOp);
+                const isNextEvent =
+                    (typeof event.styleIndex === 'number' && styleIndex >= primaryStyleCount) ||
+                    (typeof event.styleIndex !== 'number' && belongsNextByOp && !belongsPrimaryByOp);
+
+                if (primaryTotals.has(event.opId) && isPrimaryEvent) {
+                    primaryTotals.set(event.opId, (primaryTotals.get(event.opId) || 0) + event.count);
+                }
+                if (nextTotals.has(event.opId) && isNextEvent) {
+                    nextTotals.set(event.opId, (nextTotals.get(event.opId) || 0) + event.count);
+                }
+            });
+        });
+
+        const primaryMin = primaryFinalOps.length > 0 ? Math.min(...Array.from(primaryTotals.values())) : 0;
+        const nextMin = nextFinalOps.length > 0 ? Math.min(...Array.from(nextTotals.values())) : 0;
+
+        return { primary: Math.floor(primaryMin), next: Math.floor(nextMin) };
+    }, []);
+
+    const scenarioOutputs = useMemo(() => {
+        if (!selectedStyle || assignments.length === 0) return [];
+
+        const { simulationStyles, simulationAssignments } = buildSimulationInputs(
+            selectedStyle,
+            assignments,
+            selectedNextStyle,
+            nextAssignments
+        );
+
+        const scenarios = [
+            { id: 'conservative', label: 'Conservative', perfScale: 0.92, startDelayDelta: 10, shiftExtensionDelta: -15 },
+            { id: 'expected', label: 'Expected', perfScale: 1, startDelayDelta: 0, shiftExtensionDelta: 0 },
+            { id: 'optimistic', label: 'Optimistic', perfScale: 1.08, startDelayDelta: -5, shiftExtensionDelta: 10 },
+        ] as const;
+
+        return scenarios.map(scenario => {
+            const adjustedAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {};
+            operators.forEach(op => {
+                const base = operatorAttendance[op.id] || { startDelay: 0, shiftExtension: 0 };
+                adjustedAttendance[op.id] = {
+                    startDelay: Math.max(0, base.startDelay + scenario.startDelayDelta),
+                    shiftExtension: base.shiftExtension + scenario.shiftExtensionDelta,
+                };
+            });
+
+            const simulated = simulateProductionSchedule(
+                simulationStyles,
+                simulationAssignments,
+                operators,
+                machineCounts,
+                availableMinutes,
+                switchDelay,
+                adjustedAttendance,
+                scaleHistoricalPerformance(learnedPerformance, scenario.perfScale)
+            );
+
+            const output = calculateBottleneckForSchedule(selectedStyle, selectedNextStyle, simulated.schedule);
+            return {
+                id: scenario.id,
+                label: scenario.label,
+                ...output,
+                total: output.primary + output.next,
+            };
+        });
+    }, [
+        selectedStyle,
+        selectedNextStyle,
+        assignments,
+        nextAssignments,
+        operators,
+        machineCounts,
+        availableMinutes,
+        switchDelay,
+        operatorAttendance,
+        learnedPerformance,
+        buildSimulationInputs,
+        calculateBottleneckForSchedule,
+    ]);
+
+    const confidenceBand = useMemo(() => {
+        if (scenarioOutputs.length === 0) return null;
+        const totals = scenarioOutputs.map(s => s.total);
+        const expected = scenarioOutputs.find(s => s.id === 'expected')?.total ?? totals[0];
+        return {
+            low: Math.min(...totals),
+            expected,
+            high: Math.max(...totals),
+        };
+    }, [scenarioOutputs]);
+
+    const planningKpis = useMemo(() => {
+        if (!selectedStyle || !simResult.schedule) {
+            return {
+                throughputPerHour: 0,
+                machineUtilization: 0,
+                changeoverLossMinutes: 0,
+                estimatedWip: 0,
+                scheduleAdherence: 0,
+            };
+        }
+
+        const totalOutput = bottleneckOutput.primary + bottleneckOutput.next;
+        const throughputPerHour = availableMinutes > 0 ? (totalOutput / (availableMinutes / 60)) : 0;
+
+        const styleOpById = new Map<string, { machineType: string }>();
+        selectedStyle.operations.forEach(op => styleOpById.set(op.id, { machineType: op.machineType }));
+        selectedNextStyle?.operations.forEach(op => styleOpById.set(op.id, { machineType: op.machineType }));
+
+        let productiveMachineMinutes = 0;
+        let changeoverLossMinutes = 0;
+
+        Object.values(simResult.schedule).forEach(events => {
+            const sorted = [...events].sort((a, b) => a.start - b.start);
+            sorted.forEach((event, index) => {
+                productiveMachineMinutes += Math.max(0, event.end - event.start);
+                if (index === 0) return;
+                const previous = sorted[index - 1];
+                const prevMachine = styleOpById.get(previous.opId)?.machineType;
+                const currentMachine = styleOpById.get(event.opId)?.machineType;
+                if (prevMachine && currentMachine && prevMachine !== currentMachine) {
+                    changeoverLossMinutes += Math.max(0, event.start - previous.end);
+                }
+            });
+        });
+
+        const usedMachineTypes = new Set<string>();
+        styleOpById.forEach(value => usedMachineTypes.add(value.machineType));
+        const totalMachineCapacity = Array.from(usedMachineTypes).reduce((sum, machineType) => {
+            return sum + ((machineCounts[machineType] || 1) * availableMinutes);
+        }, 0);
+        const machineUtilization = totalMachineCapacity > 0
+            ? (productiveMachineMinutes / totalMachineCapacity) * 100
+            : 0;
+
+        const estimateWipForStyle = (style?: GarmentStyle) => {
+            if (!style) return 0;
+            let total = 0;
+            style.operations.forEach(op => {
+                const output = scheduledCountPerOp[op.id] || 0;
+                const successors = style.operations.filter(next => next.dependencies?.includes(op.id));
+                if (successors.length === 0) return;
+                const downstream = Math.min(...successors.map(next => scheduledCountPerOp[next.id] || 0));
+                total += Math.max(0, output - downstream);
+            });
+            return total;
+        };
+        const estimatedWip = estimateWipForStyle(selectedStyle) + estimateWipForStyle(selectedNextStyle);
+
+        const [shiftHour, shiftMinute] = shiftStartTime.split(':').map(Number);
+        const shiftStart = Number.isFinite(shiftHour) && Number.isFinite(shiftMinute)
+            ? (shiftHour * 60) + shiftMinute
+            : SHIFT_START_MINUTES;
+        const now = new Date();
+        const currentShiftMinute = Math.max(0, ((now.getHours() * 60) + now.getMinutes()) - shiftStart);
+        let plannedTillNow = 0;
+        Object.values(simResult.schedule).forEach(events => {
+            events.forEach(event => {
+                if (event.end <= currentShiftMinute) {
+                    plannedTillNow += event.count;
+                }
+            });
+        });
+
+        const selectedStyleIds = new Set([selectedStyle.id, selectedNextStyle?.id].filter(Boolean));
+        const actualTillNow = (todayProductionLogs || [])
+            .filter(log => selectedStyleIds.has(log.styleId))
+            .reduce((sum, log) => sum + (log.cumulativeQuantity || 0), 0);
+        const scheduleAdherence = plannedTillNow > 0 ? (actualTillNow / plannedTillNow) * 100 : 0;
+
+        return {
+            throughputPerHour,
+            machineUtilization,
+            changeoverLossMinutes,
+            estimatedWip,
+            scheduleAdherence,
+        };
+    }, [
+        selectedStyle,
+        selectedNextStyle,
+        simResult.schedule,
+        bottleneckOutput.primary,
+        bottleneckOutput.next,
+        availableMinutes,
+        machineCounts,
+        scheduledCountPerOp,
+        todayProductionLogs,
+        shiftStartTime,
+    ]);
+
+    const theoreticalCapacityPotential = useMemo(() => {
+        const totalSmv = (selectedStyle?.totalSmv || 0) + (selectedNextStyle?.totalSmv || 0);
+        const avgSmv = totalSmv / (selectedNextStyle ? 2 : 1);
+        const count = availableOperatorIds.length || 0;
+        if (!avgSmv || !count) return 0;
+        return Math.floor((availableMinutes * count * 0.85) / avgSmv);
+    }, [selectedStyle?.totalSmv, selectedNextStyle?.totalSmv, selectedNextStyle?.id, availableOperatorIds.length, availableMinutes]);
+
+    const orderBoundedPotential = useMemo(() => {
+        const remainingOrders = selectedNextStyle
+            ? remainingPrimaryQty + remainingNextQty
+            : remainingPrimaryQty;
+        const hasOrderBound = (selectedStyle?.quantity || 0) > 0 || (selectedNextStyle?.quantity || 0) > 0;
+        if (!hasOrderBound) return theoreticalCapacityPotential;
+        if (remainingOrders <= 0) return 0;
+        return Math.min(theoreticalCapacityPotential, remainingOrders);
+    }, [
+        selectedStyle?.quantity,
+        selectedNextStyle?.id,
+        selectedNextStyle?.quantity,
+        remainingPrimaryQty,
+        remainingNextQty,
+        theoreticalCapacityPotential
+    ]);
+
+    const isPlannedOrderComplete = useMemo(() => {
+        const primaryComplete = !selectedStyle || bottleneckOutput.primary >= remainingPrimaryQty;
+        const nextComplete = !selectedNextStyle || bottleneckOutput.next >= remainingNextQty;
+        return primaryComplete && nextComplete;
+    }, [
+        selectedStyle?.id,
+        selectedNextStyle?.id,
+        bottleneckOutput.primary,
+        bottleneckOutput.next,
+        remainingPrimaryQty,
+        remainingNextQty
+    ]);
 
     // Helper to generate instructions
     const instructions = useMemo(() => {
@@ -1011,6 +1529,94 @@ export function ProductionPlanner(): React.ReactNode {
         return list.sort((a, b) => b.type.localeCompare(a.type));
     }, [assignments, nextAssignments, selectedStyle, selectedNextStyle, operators, flowMetrics, nextFlowMetrics]);
 
+    const optimizationRecommendations = useMemo(() => {
+        if (!selectedStyle || assignments.length === 0) return [];
+
+        const operationsWithMetrics = selectedStyle.operations
+            .map(op => ({ op, metric: flowMetrics[op.id] }))
+            .filter(item => !!item.metric);
+
+        if (operationsWithMetrics.length === 0) return [];
+
+        const bottleneck = operationsWithMetrics.reduce((lowest, current) =>
+            current.metric.effectiveOutput < lowest.metric.effectiveOutput ? current : lowest
+        );
+
+        const currentMin = bottleneck.metric.effectiveOutput || 0;
+        if (currentMin <= 0) return [];
+
+        const candidateRecommendations: {
+            operatorId: string;
+            operatorName: string;
+            fromOperation: string;
+            toOperation: string;
+            estimatedGain: number;
+        }[] = [];
+
+        const surplusOps = operationsWithMetrics.filter(item =>
+            item.op.id !== bottleneck.op.id &&
+            item.metric.effectiveOutput > currentMin * 1.15 &&
+            item.metric.assignedOps.length > 1
+        );
+
+        surplusOps.forEach(surplus => {
+            const assignment = assignments.find(a => a.operationId === surplus.op.id);
+            if (!assignment) return;
+
+            assignment.operatorIds.forEach(operatorId => {
+                const operator = operators.find(op => op.id === operatorId);
+                if (!operator) return;
+                if (!operator.skills?.includes(bottleneck.op.machineType)) return;
+                const alreadyOnBottleneck = assignments
+                    .find(a => a.operationId === bottleneck.op.id)
+                    ?.operatorIds.includes(operatorId);
+                if (alreadyOnBottleneck) return;
+
+                const shiftedAssignments = assignments
+                    .map(a => {
+                        if (a.operationId === surplus.op.id) {
+                            return { ...a, operatorIds: a.operatorIds.filter(id => id !== operatorId) };
+                        }
+                        if (a.operationId === bottleneck.op.id) {
+                            return { ...a, operatorIds: [...a.operatorIds, operatorId] };
+                        }
+                        return a;
+                    })
+                    .filter(a => a.operatorIds.length > 0);
+
+                const shiftedMetrics = calculateMetrics(selectedStyle, shiftedAssignments);
+                const shiftedMin = selectedStyle.operations.reduce((min, op) => {
+                    const value = shiftedMetrics[op.id]?.effectiveOutput || 0;
+                    return Math.min(min, value);
+                }, Number.POSITIVE_INFINITY);
+
+                const estimatedGain = Math.max(0, shiftedMin - currentMin);
+                if (estimatedGain > 0.25) {
+                    candidateRecommendations.push({
+                        operatorId,
+                        operatorName: operator.name,
+                        fromOperation: surplus.op.name,
+                        toOperation: bottleneck.op.name,
+                        estimatedGain,
+                    });
+                }
+            });
+        });
+
+        const deduped = new Map<string, typeof candidateRecommendations[0]>();
+        candidateRecommendations.forEach(item => {
+            const key = `${item.operatorId}:${item.toOperation}`;
+            const existing = deduped.get(key);
+            if (!existing || existing.estimatedGain < item.estimatedGain) {
+                deduped.set(key, item);
+            }
+        });
+
+        return Array.from(deduped.values())
+            .sort((a, b) => b.estimatedGain - a.estimatedGain)
+            .slice(0, 3);
+    }, [selectedStyle, assignments, flowMetrics, operators, calculateMetrics]);
+
     if (stylesLoading || operatorsLoading) {
 
         return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>;
@@ -1044,7 +1650,10 @@ export function ProductionPlanner(): React.ReactNode {
                         {/* NEW: Next Style Selector */}
                         <div className="w-full md:w-1/3 space-y-2">
                             <label className="text-sm font-medium">Next Style (Continuous Flow)</label>
-                            <Select value={selectedNextStyleId} onValueChange={setSelectedNextStyleId}>
+                            <Select
+                                value={selectedNextStyleId || 'none'}
+                                onValueChange={(value) => setSelectedNextStyleId(value === 'none' ? '' : value)}
+                            >
                                 <SelectTrigger>
                                     <SelectValue placeholder="Select Next Style (Optional)" />
                                 </SelectTrigger>
@@ -1104,26 +1713,60 @@ export function ProductionPlanner(): React.ReactNode {
                         </div>
                     </div>
 
+                    <div className="flex flex-col md:flex-row md:items-end gap-3 p-3 border rounded-md bg-muted/30">
+                        <div className="space-y-1">
+                            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Rolling Re-Plan</div>
+                            <div className="text-sm text-muted-foreground">
+                                Recompute assignments from live logs every {clamp(replanIntervalMinutes, 30, 180)} minutes.
+                            </div>
+                        </div>
+                        <div className="flex items-center gap-2 md:ml-auto">
+                            <Button
+                                variant={enableRollingReplan ? "default" : "outline"}
+                                onClick={() => setEnableRollingReplan(prev => !prev)}
+                            >
+                                {enableRollingReplan ? 'Enabled' : 'Disabled'}
+                            </Button>
+                            <Input
+                                type="number"
+                                className="w-24"
+                                min={30}
+                                max={180}
+                                step={15}
+                                value={replanIntervalMinutes}
+                                onChange={(e) => setReplanIntervalMinutes(Number(e.target.value) || 60)}
+                            />
+                            <Button
+                                variant="outline"
+                                onClick={() => {
+                                    handleAutoAssign();
+                                    setLastReplanAt(new Date());
+                                }}
+                                disabled={!selectedStyle}
+                            >
+                                Re-plan Now
+                            </Button>
+                        </div>
+                        {lastReplanAt && (
+                            <div className="text-xs text-muted-foreground md:ml-2">
+                                Last: {format(lastReplanAt, 'HH:mm')}
+                            </div>
+                        )}
+                    </div>
+
                     {planningMode === 'capacity' && (
                         <div className="flex gap-4 justify-end w-full">
                             <div className="p-3 bg-muted/50 rounded-md flex flex-col items-end min-w-[120px]">
                                 <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider" title="Theoretical max based on team size">Max Potential</span>
                                 <div className="flex items-baseline gap-1">
                                     <span className="text-xl font-bold text-muted-foreground">
-                                        {(() => {
-                                            const totalSmv = (selectedStyle?.totalSmv || 0) + (selectedNextStyle?.totalSmv || 0);
-                                            const avgSmv = totalSmv / (selectedNextStyle ? 2 : 1);
-                                            const count = availableOperatorIds.length || 0;
-                                            if (!avgSmv || !count) return 0;
-                                            // Simple SMV based capacity: (Mins * Ops) / SMV-in-mins
-                                            return Math.floor((availableMinutes * count * 0.85) / avgSmv); // 85% Efficiency baseline
-                                        })()}
+                                        {orderBoundedPotential}
                                     </span>
                                     <span className="text-xs text-muted-foreground">pcs/day</span>
                                 </div>
                             </div>
                             <div className="p-3 bg-primary/10 border border-primary/20 rounded-md flex flex-col items-end min-w-[150px]">
-                                <span className="text-xs text-primary font-medium uppercase tracking-wider" title="Actual simulation output containing specific order quantities">Scheduled Output</span>
+                                <span className="text-xs text-primary font-medium uppercase tracking-wider" title="Actual simulation output containing specific order quantities">Actual Output</span>
                                 <div className="flex flex-col items-end">
                                     <div className="flex items-baseline gap-1">
                                         <span className="text-3xl font-bold text-primary">
@@ -1140,7 +1783,9 @@ export function ProductionPlanner(): React.ReactNode {
                                         </div>
                                     )}
                                 </div>
-                                {assignments.length > 0 && (bottleneckOutput.primary + bottleneckOutput.next) < Math.floor((availableMinutes * (availableOperatorIds.length || 1) * 0.85) / (((selectedStyle?.totalSmv || 10) + (selectedNextStyle?.totalSmv || 0)) / (selectedNextStyle ? 2 : 1))) && (
+                                {assignments.length > 0 &&
+                                    orderBoundedPotential < theoreticalCapacityPotential &&
+                                    (bottleneckOutput.primary + bottleneckOutput.next) >= orderBoundedPotential && (
                                     <div className="text-[10px] text-amber-600 font-medium mt-1">
                                         ⚠ Limited by Order Qty
                                     </div>
@@ -1159,6 +1804,61 @@ export function ProductionPlanner(): React.ReactNode {
                             </div>
                         </div>
                     )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
+                        <div className="p-3 border rounded-md bg-background">
+                            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Throughput</div>
+                            <div className="text-lg font-semibold">{planningKpis.throughputPerHour.toFixed(1)} pcs/hr</div>
+                        </div>
+                        <div className="p-3 border rounded-md bg-background">
+                            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Machine Utilization</div>
+                            <div className="text-lg font-semibold">{planningKpis.machineUtilization.toFixed(1)}%</div>
+                        </div>
+                        <div className="p-3 border rounded-md bg-background">
+                            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Changeover Loss</div>
+                            <div className="text-lg font-semibold">{Math.round(planningKpis.changeoverLossMinutes)} min</div>
+                        </div>
+                        <div className="p-3 border rounded-md bg-background">
+                            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Estimated WIP</div>
+                            <div className="text-lg font-semibold">{Math.round(planningKpis.estimatedWip)} pcs</div>
+                        </div>
+                        <div className="p-3 border rounded-md bg-background">
+                            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Schedule Adherence</div>
+                            <div className="text-lg font-semibold">{planningKpis.scheduleAdherence.toFixed(0)}%</div>
+                        </div>
+                    </div>
+
+                    {confidenceBand && (
+                        <div className="p-3 border rounded-md bg-muted/20">
+                            <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-2">
+                                Scenario Confidence
+                            </div>
+                            <div className="flex flex-wrap items-center gap-6">
+                                <div className="text-sm">Low: <span className="font-semibold">{confidenceBand.low}</span></div>
+                                <div className="text-sm">Expected: <span className="font-semibold">{confidenceBand.expected}</span></div>
+                                <div className="text-sm">High: <span className="font-semibold">{confidenceBand.high}</span></div>
+                            </div>
+                        </div>
+                    )}
+
+                    {optimizationRecommendations.length > 0 && (
+                        <div className="p-3 border rounded-md bg-blue-50/50 dark:bg-blue-950/10">
+                            <div className="text-xs font-semibold uppercase tracking-wider text-blue-700 dark:text-blue-300 mb-2">
+                                Recommended Rebalance Actions
+                            </div>
+                            <div className="space-y-2">
+                                {optimizationRecommendations.map((item) => (
+                                    <div key={`${item.operatorId}-${item.toOperation}`} className="text-sm">
+                                        Move <span className="font-semibold">{item.operatorName}</span> from{' '}
+                                        <span className="font-medium">{item.fromOperation}</span> to{' '}
+                                        <span className="font-medium">{item.toOperation}</span>{' '}
+                                        <span className="text-blue-700 dark:text-blue-300">(+{item.estimatedGain.toFixed(1)} pcs/day)</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
                     <div className="flex items-end gap-2">
                         <Popover>
                             <PopoverTrigger asChild>
@@ -1383,6 +2083,22 @@ export function ProductionPlanner(): React.ReactNode {
                                     {style.operations.map(op => {
                                         const metric = metrics[op.id];
                                         if (!metric) return null;
+                                        const styleRemainingTarget = planningMode === 'capacity'
+                                            ? (
+                                                style.id === selectedStyle?.id
+                                                    ? remainingPrimaryQty
+                                                    : style.id === selectedNextStyle?.id
+                                                        ? remainingNextQty
+                                                        : dailyTarget
+                                            )
+                                            : dailyTarget;
+                                        const targetForDisplay = Math.max(0, styleRemainingTarget);
+                                        const isTargetMet = targetForDisplay > 0
+                                            ? (scheduledCountPerOp[op.id] || 0) >= targetForDisplay
+                                            : false;
+                                        const isNearTarget = targetForDisplay > 0
+                                            ? (scheduledCountPerOp[op.id] || 0) >= targetForDisplay * 0.8
+                                            : false;
 
                                         return (
                                             <TableRow key={op.id}>
@@ -1469,16 +2185,16 @@ export function ProductionPlanner(): React.ReactNode {
                                                 </TableCell>
                                                 <TableCell className="text-right">
                                                     <div className="flex flex-col items-end gap-0.5">
-                                                        <span className={`text-sm font-semibold ${(scheduledCountPerOp[op.id] || 0) >= dailyTarget
+                                                        <span className={`text-sm font-semibold ${isTargetMet
                                                             ? 'text-green-600'
-                                                            : (scheduledCountPerOp[op.id] || 0) >= dailyTarget * 0.8
+                                                            : isNearTarget
                                                                 ? 'text-amber-600'
                                                                 : 'text-red-600'
                                                             }`}>
                                                             {Math.floor(scheduledCountPerOp[op.id] || 0)}
                                                         </span>
                                                         <span className="text-[10px] text-muted-foreground">
-                                                            / {dailyTarget} units
+                                                            / {targetForDisplay} units
                                                         </span>
                                                     </div>
                                                 </TableCell>
@@ -1493,7 +2209,7 @@ export function ProductionPlanner(): React.ReactNode {
                                                                     (Wait for {op.dependencies?.map(d => style.operations.find(o => o.id === d)?.name).join(',') || 'Input'})
                                                                 </span>
                                                             </div>
-                                                        ) : metric.effectiveOutput >= dailyTarget ? (
+                                                        ) : targetForDisplay > 0 && metric.effectiveOutput >= targetForDisplay ? (
                                                             <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
                                                         ) : (
                                                             <div className="flex items-center justify-center text-amber-500" title={`Local Capacity: ${Math.floor(metric.localCapacity)}`}>
@@ -1616,29 +2332,26 @@ export function ProductionPlanner(): React.ReactNode {
                             )}
                         </div>
 
-                        {/* Placeholder until logs are fetched or passed in */}
-                        {(() => {
-                            const productionLogs: any[] = [];
-                            return (
-                                <DailyTimeline
-                                    assignedOperators={
-                                        unique([...assignments, ...nextAssignments].flatMap(a => a.operatorIds))
-                                            .map(id => operators.find(o => o.id === id)!)
-                                            .filter(Boolean)
-                                    }
-                                    assignments={[...assignments, ...nextAssignments]}
-                                    selectedStyle={selectedStyle}
-                                    selectedNextStyle={selectedNextStyle}
-                                    flowMetrics={flowMetrics}
-                                    availableMinutes={availableMinutes + (
-                                        Object.values(operatorAttendance).reduce((max, curr) => Math.max(max, curr.shiftExtension || 0), 0)
-                                    )}
-                                    schedule={simResult.schedule}
-                                    productionLogs={productionLogs}
-                                    switchDelay={switchDelay}
-                                />
-                            );
-                        })()}
+                        <DailyTimeline
+                            assignedOperators={
+                                unique([...assignments, ...nextAssignments].flatMap(a => a.operatorIds))
+                                    .map(id => operators.find(o => o.id === id)!)
+                                    .filter(Boolean)
+                            }
+                            assignments={[...assignments, ...nextAssignments]}
+                            selectedStyle={selectedStyle}
+                            selectedNextStyle={selectedNextStyle}
+                            flowMetrics={{ ...flowMetrics, ...nextFlowMetrics }}
+                            availableMinutes={availableMinutes + (
+                                Object.values(operatorAttendance).reduce((max, curr) => Math.max(max, curr.shiftExtension || 0), 0)
+                            )}
+                            schedule={simResult.schedule}
+                            productionLogs={(todayProductionLogs || []).filter(log =>
+                                log.styleId === selectedStyle.id || log.styleId === selectedNextStyle?.id
+                            )}
+                            isOrderComplete={isPlannedOrderComplete}
+                            switchDelay={switchDelay}
+                        />
                     </>
                 )}
             </CardContent>

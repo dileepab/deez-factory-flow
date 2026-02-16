@@ -4,17 +4,141 @@ import type { GarmentStyle, Operator, Assignment } from '@/lib/types';
 // Helper: Filter unique items
 export const unique = <T,>(arr: T[]) => Array.from(new Set(arr));
 
+export type HistoricalPerformanceMap = Record<string, Record<string, number>>;
+
+const clamp = (value: number, min: number, max: number): number =>
+    Math.max(min, Math.min(max, value));
+
+const getOperatorMinutes = (
+    availableMinutes: number,
+    attendance: { startDelay: number; shiftExtension: number } | undefined
+): number => {
+    const startDelay = attendance?.startDelay || 0;
+    const shiftExtension = attendance?.shiftExtension || 0;
+    return Math.max(0, availableMinutes + shiftExtension - startDelay);
+};
+
+const getHistoricalMultiplier = (
+    historicalPerformance: HistoricalPerformanceMap,
+    operatorId: string,
+    operationId: string
+): number => {
+    const value = historicalPerformance?.[operatorId]?.[operationId];
+    if (typeof value !== 'number' || !isFinite(value)) {
+        return 1;
+    }
+    return clamp(value, 0.6, 1.5);
+};
+
+const deriveWipCapForOperation = (opSmvSeconds: number): number => {
+    const smvMinutes = Math.max(0.25, opSmvSeconds / 60);
+    // Cap WIP to roughly 30-45 minutes worth of work to reduce upstream overproduction.
+    const suggested = Math.round(35 / smvMinutes);
+    return clamp(suggested, 8, 60);
+};
+
 // Helper: Simulate Minute-by-Minute Production for Timeline
 // Returns a schedule of segments for each operator
 export const simulateProductionSchedule = (
-    styles: GarmentStyle[],
-    allAssignments: Assignment[][], // Array of assignment/arrays corresponding to styles
+    stylesInput: GarmentStyle[] | GarmentStyle,
+    allAssignmentsInput: Assignment[][] | Assignment[], // Array of assignment arrays corresponding to styles
     operators: Operator[],
     machineCounts: Record<string, number>,
     availableMinutes: number,
     switchDelay: number = 5,
-    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {}
+    operatorAttendanceOrNextStyle: Record<string, { startDelay: number; shiftExtension: number }> | GarmentStyle = {},
+    historicalPerformanceOrNextStyle: HistoricalPerformanceMap | GarmentStyle | Assignment[] = {},
+    legacyNextAssignmentsOrAttendance: Assignment[] | Record<string, number | { startDelay?: number; shiftExtension?: number }> = []
 ) => {
+    const isStyleArg = (value: unknown): value is GarmentStyle =>
+        !!value &&
+        typeof value === 'object' &&
+        'operations' in (value as any) &&
+        Array.isArray((value as any).operations);
+
+    const isAssignmentArrayArg = (value: unknown): value is Assignment[] =>
+        Array.isArray(value) &&
+        (value.length === 0 || (typeof value[0] === 'object' && value[0] !== null && 'operationId' in (value[0] as any)));
+
+    const normalizeAttendanceArg = (value: unknown): Record<string, { startDelay: number; shiftExtension: number }> | null => {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+
+        const rawEntries = Object.entries(value as Record<string, unknown>);
+        if (rawEntries.length === 0) return {};
+
+        const normalized: Record<string, { startDelay: number; shiftExtension: number }> = {};
+        for (const [uid, raw] of rawEntries) {
+            if (typeof raw === 'number' && isFinite(raw)) {
+                normalized[uid] = { startDelay: Math.max(0, raw), shiftExtension: 0 };
+                continue;
+            }
+
+            if (raw && typeof raw === 'object') {
+                const startRaw = (raw as any).startDelay;
+                const extensionRaw = (raw as any).shiftExtension;
+                if (startRaw === undefined && extensionRaw === undefined) return null;
+
+                const startDelay = Number(startRaw ?? 0);
+                const shiftExtension = Number(extensionRaw ?? 0);
+                normalized[uid] = {
+                    startDelay: isFinite(startDelay) ? Math.max(0, startDelay) : 0,
+                    shiftExtension: isFinite(shiftExtension) ? shiftExtension : 0
+                };
+                continue;
+            }
+
+            return null;
+        }
+
+        return normalized;
+    };
+
+    const baseStyles = Array.isArray(stylesInput) ? stylesInput : [stylesInput];
+    const baseAssignments = Array.isArray(allAssignmentsInput[0])
+        ? allAssignmentsInput as Assignment[][]
+        : [allAssignmentsInput as Assignment[]];
+
+    let operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {};
+    let historicalPerformance: HistoricalPerformanceMap = {};
+    let legacyNextStyle: GarmentStyle | undefined;
+    let parsedLegacyNextAssignments: Assignment[] = [];
+    const trailingLegacyAttendance = normalizeAttendanceArg(legacyNextAssignmentsOrAttendance);
+
+    // Legacy overload A:
+    // simulate(style, assignments, operators, machines, mins, delay, nextStyle, nextAssignments)
+    if (isStyleArg(operatorAttendanceOrNextStyle)) {
+        legacyNextStyle = operatorAttendanceOrNextStyle;
+        if (isAssignmentArrayArg(historicalPerformanceOrNextStyle)) {
+            parsedLegacyNextAssignments = historicalPerformanceOrNextStyle;
+        } else if (isAssignmentArrayArg(legacyNextAssignmentsOrAttendance)) {
+            parsedLegacyNextAssignments = legacyNextAssignmentsOrAttendance;
+        } else {
+            parsedLegacyNextAssignments = [];
+        }
+    } else {
+        operatorAttendance = normalizeAttendanceArg(operatorAttendanceOrNextStyle) || {};
+
+        // Legacy overload B:
+        // simulate(style, assignments, operators, machines, mins, delay, attendance, nextStyle, nextAssignments)
+        if (isStyleArg(historicalPerformanceOrNextStyle)) {
+            legacyNextStyle = historicalPerformanceOrNextStyle;
+            parsedLegacyNextAssignments = isAssignmentArrayArg(legacyNextAssignmentsOrAttendance)
+                ? legacyNextAssignmentsOrAttendance
+                : [];
+        } else {
+            historicalPerformance = (historicalPerformanceOrNextStyle as HistoricalPerformanceMap) || {};
+        }
+    }
+
+    // Legacy overload C:
+    // simulate(style, assignments, operators, machines, mins, delay, undefined, undefined, operatorDelays)
+    if (Object.keys(operatorAttendance).length === 0 && trailingLegacyAttendance) {
+        operatorAttendance = trailingLegacyAttendance;
+    }
+
+    const styles = legacyNextStyle ? [...baseStyles, legacyNextStyle] : baseStyles;
+    const allAssignments = legacyNextStyle ? [...baseAssignments, parsedLegacyNextAssignments] : baseAssignments;
+
     // 1. Setup Logging & Output
     const logs: string[] = [];
     const log = (msg: string) => { if (logs.length < 500) logs.push(msg); };
@@ -97,16 +221,23 @@ export const simulateProductionSchedule = (
                 });
             }
         });
+        const finalOperationIds = new Set(
+            style.operations
+                .filter(op => !successors.has(op.id) || (successors.get(op.id)?.length || 0) === 0)
+                .map(op => op.id)
+        );
 
         // 2. Initialize State
         const inventory = new Map<string, number>();
         const remainingTargets = new Map<string, number>();
+        const wipCaps = new Map<string, number>();
         const totalOrderQty = style.quantity || 10000;
 
         style.operations.forEach(op => {
             const done = op.completedQuantity || 0;
             const left = Math.max(0, totalOrderQty - done);
             remainingTargets.set(op.id, left);
+            wipCaps.set(op.id, deriveWipCapForOperation(op.smv));
         });
 
         // Initial Inventory
@@ -129,8 +260,10 @@ export const simulateProductionSchedule = (
             effectiveDependencies,
             targetRatios,
             successors,
+            finalOperationIds,
             inventory,
             remainingTargets,
+            wipCaps,
             userProcessedCounts,
             assignments
         };
@@ -180,10 +313,8 @@ export const simulateProductionSchedule = (
                 const uMap = meta.userProcessedCounts.get(uid);
                 if (uMap) uMap.set(op.id, (uMap.get(op.id) || 0) + state.count);
 
-                const left = meta.remainingTargets.get(op.id) || 0;
-                meta.remainingTargets.set(op.id, Math.max(0, left - state.count));
-
-                log(`T=${t.toFixed(0)} RELEASE ${uid} ${mType}. Output ${op.name} (S${state.styleIndex}): +${state.count}`);
+                const styleTag = state.styleIndex > 0 ? ' (NEXT)' : '';
+                log(`T=${t.toFixed(0)} RELEASE ${uid} ${mType}. Output ${op.name} (S${state.styleIndex})${styleTag}: +${state.count}`);
             }
             opState.delete(uid);
         });
@@ -216,10 +347,17 @@ export const simulateProductionSchedule = (
                         const currentInv = meta.inventory.get(op.id) || 0;
                         const succs = meta.successors.get(op.id) || [];
                         const isFinal = !meta.successors.has(op.id) || meta.successors.get(op.id)!.length === 0;
+                        const opWipCap = meta.wipCaps.get(op.id) || 15;
 
-                        const successorBlocked = succs.some(sId => (meta.inventory.get(sId) || 0) > 15);
-                        if (successorBlocked) return 2;
-                        if (!isFinal && currentInv < 15) return 0;
+                        const successorBlocked = succs.some(sId => {
+                            if (meta.finalOperationIds.has(sId)) return false;
+                            const succCap = meta.wipCaps.get(sId) || 15;
+                            return (meta.inventory.get(sId) || 0) >= succCap;
+                        });
+
+                        if (successorBlocked) return 4;
+                        if (!isFinal && currentInv >= opWipCap) return 3;
+                        if (!isFinal && currentInv < Math.max(4, Math.floor(opWipCap * 0.4))) return 0;
                         return 1;
                     };
 
@@ -233,6 +371,22 @@ export const simulateProductionSchedule = (
 
                 let assigned = false;
                 for (const op of candidates) {
+                    const succs = meta.successors.get(op.id) || [];
+                    const isFinal = succs.length === 0;
+                    const ownInventory = meta.inventory.get(op.id) || 0;
+                    const opWipCap = meta.wipCaps.get(op.id) || 15;
+                    const downstreamBlocked = succs.some(sId => {
+                        if (meta.finalOperationIds.has(sId)) return false;
+                        const succCap = meta.wipCaps.get(sId) || 15;
+                        return (meta.inventory.get(sId) || 0) >= succCap;
+                    });
+
+                    // Pull-based flow control:
+                    // 1) don't keep feeding downstream stations when they are WIP-saturated
+                    // 2) don't overbuild intermediate inventory beyond op-specific cap
+                    if (downstreamBlocked) continue;
+                    if (!isFinal && ownInventory >= opWipCap) continue;
+
                     const mType = op.machineType.trim();
                     const mUsed = machineUsage.get(mType) || 0;
                     const mTotal = machineCounts[mType] || 1;
@@ -257,9 +411,12 @@ export const simulateProductionSchedule = (
 
                     if (maxInput < MIN_BATCH && !isEndOfShift && !upstreamFinished && deps.length) continue;
 
-                    const efficiency = (user.efficiencyRating || 100) / 100;
+                    const efficiency =
+                        ((user.efficiencyRating || 100) / 100) *
+                        getHistoricalMultiplier(historicalPerformance, user.id, op.id);
+                    const boundedEfficiency = clamp(efficiency, 0.45, 1.8);
                     const smvMinutes = op.smv / 60; // Treated as minutes directly
-                    const minutesPerPc = smvMinutes / efficiency;
+                    const minutesPerPc = smvMinutes / boundedEfficiency;
                     const rawTarget = Math.floor(60 / minutesPerPc); // Target per Hour (was 20? 20 mins? No, usually hourly target)
                     // Wait, rawTarget logic was '20 / minutesPerPc'. 
                     // If 20 means "20 minutes batch", then okay.
@@ -268,6 +425,14 @@ export const simulateProductionSchedule = (
                     const rawTargetBatch = Math.floor(20 / minutesPerPc); // Batch for 20 mins?
                     const targetPcs = Math.max(10, Math.min(100, rawTargetBatch));
                     const actualPcs = Math.min(maxInput, targetPcs);
+                    if (actualPcs <= 0) continue;
+
+                    // Reserve target immediately to avoid over-allocation from concurrent claims.
+                    const remainingBefore = meta.remainingTargets.get(op.id) || 0;
+                    if (remainingBefore <= 0) continue;
+                    const reservedPcs = Math.min(actualPcs, remainingBefore);
+                    if (reservedPcs <= 0) continue;
+                    meta.remainingTargets.set(op.id, Math.max(0, remainingBefore - reservedPcs));
 
                     // Switch Delay
                     const lastType = operatorLastMachine.get(user.id);
@@ -282,13 +447,13 @@ export const simulateProductionSchedule = (
                         delay = switchDelay;
                     }
 
-                    const duration = (actualPcs * minutesPerPc) + delay;
+                    const duration = (reservedPcs * minutesPerPc) + delay;
 
                     opState.set(user.id, {
                         busyUntil: t + duration,
                         opId: op.id,
                         startTick: t + delay,
-                        count: actualPcs,
+                        count: reservedPcs,
                         styleIndex: sIdx,
                         colorVariant: currentColor
                     });
@@ -304,12 +469,13 @@ export const simulateProductionSchedule = (
                     if (deps.length > 0) {
                         deps.forEach(d => {
                             const cur = meta.inventory.get(d) || 0;
-                            meta.inventory.set(d, cur - actualPcs);
+                            meta.inventory.set(d, cur - reservedPcs);
                         });
                     }
 
                     assigned = true;
-                    log(`T=${t.toFixed(0)} CLAIM ${user.name} ${mType}. Task: ${op.name} (S${sIdx}). Batch: ${actualPcs}.`);
+                    const styleTag = sIdx > 0 ? ' (NEXT)' : '';
+                    log(`T=${t.toFixed(0)} CLAIM ${user.name} ${mType}. Task: ${op.name} (S${sIdx})${styleTag}. Batch: ${reservedPcs}.`);
                     break;
                 }
                 if (assigned) break; // Move to next operator
@@ -329,7 +495,7 @@ export const simulateProductionSchedule = (
         const allBusy = opState.size > 0;
 
         if (allPending && !allBusy) {
-            console.log(`DEBUG: SIM FINISHED EARLY at T=${t}. Targets met.`);
+            log(`SIM FINISHED EARLY at T=${t}. Targets met.`);
             break;
         }
     }
@@ -346,17 +512,41 @@ export const solveFluidCapacity = (
     operators: Operator[],
     machineCounts: Record<string, number>,
     availableMinutes: number,
-    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {}
+    operatorAttendance: Record<string, { startDelay: number; shiftExtension: number }> = {},
+    historicalPerformance: HistoricalPerformanceMap = {}
 ) => {
     // 1. Initialize Weights (Proportional to SMV)
     // Map<OperatorId, Map<OpId, number>> (0.0 to 1.0)
     const opWeights = new Map<string, Map<string, number>>();
 
+    const operatorMinutes = new Map<string, number>();
+    operators.forEach(o => {
+        operatorMinutes.set(o.id, getOperatorMinutes(availableMinutes, operatorAttendance[o.id]));
+    });
+
+    const sharedCapacityShares = new Map<string, Map<string, number>>();
+    assignments.forEach(a => {
+        const totalCapacity = a.operatorIds.reduce((sum, uid) => {
+            return sum + (operatorMinutes.get(uid) || 0);
+        }, 0);
+        const perOpShares = new Map<string, number>();
+        a.operatorIds.forEach(uid => {
+            const share = totalCapacity > 0 ? (operatorMinutes.get(uid) || 0) / totalCapacity : 0;
+            perOpShares.set(uid, share || 0);
+        });
+        sharedCapacityShares.set(a.operationId, perOpShares);
+    });
+
     assignments.forEach(a => {
         a.operatorIds.forEach(uid => {
             if (!opWeights.has(uid)) opWeights.set(uid, new Map());
             const op = style.operations.find(o => o.id === a.operationId);
-            if (op) opWeights.get(uid)!.set(a.operationId, op.smv);
+            if (op) {
+                const capacityShare = sharedCapacityShares.get(a.operationId)?.get(uid) || 0;
+                const perfMultiplier = getHistoricalMultiplier(historicalPerformance, uid, op.id);
+                const seedWeight = op.smv * Math.max(0.05, capacityShare) * perfMultiplier;
+                opWeights.get(uid)!.set(a.operationId, seedWeight);
+            }
         });
     });
 
@@ -372,28 +562,6 @@ export const solveFluidCapacity = (
     // The current logic balances based on 'hCap' which includes minutes, but the *distribution* 
     // of work (weights) is currently just SMV based.
     // If Bob has 2x time, he should get more work if he is shared on an operation.
-
-    // For shared operations, adjust weights based on available capacity
-    const opCapacity = new Map<string, number>();
-    operators.forEach(o => {
-        const att = operatorAttendance[o.id] || { startDelay: 0, shiftExtension: 0 };
-        opCapacity.set(o.id, Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0)));
-    });
-
-    // Re-distribute shared weights
-    assignments.forEach(a => {
-        if (a.operatorIds.length > 1) {
-            const totalCap = a.operatorIds.reduce((sum, uid) => sum + (opCapacity.get(uid) || 0), 0);
-            if (totalCap > 0) {
-                a.operatorIds.forEach(uid => {
-                    const share = (opCapacity.get(uid) || 0) / totalCap;
-                    // This is a simplification. Real balancing happens in loop. 
-                    // But initial weights should reflect capacity.
-                    // opWeights.get(uid)?.set(a.operationId, ...);
-                });
-            }
-        }
-    });
 
     // 2. Iterative Balancing (Fluid Dynamics)
     const ITERATIONS = 20;
@@ -412,14 +580,15 @@ export const solveFluidCapacity = (
                 const weight = opWeights.get(uid)?.get(op.id) || 0;
 
                 // Calculate effective available minutes for this user
-                const att = operatorAttendance[user?.id || ""] || { startDelay: 0, shiftExtension: 0 };
-                const userMinutes = Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0));
+                const userMinutes = operatorMinutes.get(user?.id || '') || 0;
 
                 if (user && weight > 0) {
+                    const learnedSpeed = getHistoricalMultiplier(historicalPerformance, uid, op.id);
+                    const effectiveEfficiency = clamp(((user.efficiencyRating || 100) / 100) * learnedSpeed, 0.45, 1.8);
                     // Mins contributed = Avail * Weight
                     // Pcs = Mins / (OpSMV / 60)
                     // console.log(`User ${user.name} Minutes: ${userMinutes}. Weight: ${weight}`);
-                    hCap += ((user.efficiencyRating || 100) / 100 * userMinutes * weight) / (op.smv / 60);
+                    hCap += (effectiveEfficiency * userMinutes * weight) / (op.smv / 60);
                 }
             });
 
@@ -488,10 +657,11 @@ export const solveFluidCapacity = (
                 const weight = opWeights.get(uid)?.get(op.id) || 0;
                 finalWeights.set(uid, weight);
 
-                const att = operatorAttendance[user.id] || { startDelay: 0, shiftExtension: 0 };
-                const userMinutes = Math.max(0, availableMinutes + (att.shiftExtension || 0) - (att.startDelay || 0));
+                const userMinutes = operatorMinutes.get(user.id) || 0;
+                const learnedSpeed = getHistoricalMultiplier(historicalPerformance, uid, op.id);
+                const effectiveEfficiency = clamp(((user.efficiencyRating || 100) / 100) * learnedSpeed, 0.45, 1.8);
 
-                hCap += ((user.efficiencyRating || 100) / 100 * userMinutes * weight) / (op.smv / 60);
+                hCap += (effectiveEfficiency * userMinutes * weight) / (op.smv / 60);
             }
         });
 

@@ -472,8 +472,8 @@ describe('ProductionPlanner', () => {
             // eslint-disable-next-line testing-library/no-node-access
             const container = label.parentElement;
 
-            // Primary Output = 25 (Exact match)
-            expect(within(container as HTMLElement).getByText('25')).toBeDefined();
+            // Primary output uses bottleneck min across primary final operations.
+            expect(within(container as HTMLElement).getByText('10')).toBeDefined();
             // Next Output = 0. Format: "+0" and "pcs (Next)".
             expect(within(container as HTMLElement).getByText(/\+0/)).toBeDefined();
         });
