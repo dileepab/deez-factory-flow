@@ -303,6 +303,83 @@ describe('ProductionPlanner', () => {
         });
     });
 
+    it('supports variant-level manual assignment', async () => {
+        mockUseCollection.mockImplementation((ref) => {
+            if (ref?.path === 'styles') {
+                return {
+                    data: [{
+                        id: 'style-variant',
+                        name: 'Variant Style',
+                        status: 'active',
+                        totalSmv: 5,
+                        quantity: 20,
+                        variants: [
+                            { id: 'v-red', color: 'Red', quantity: 10 },
+                            { id: 'v-blue', color: 'Blue', quantity: 10 },
+                        ],
+                        operations: [{ id: 'op-1', name: 'Neck Binding', smv: 5, machineType: 'Sewing' }]
+                    }],
+                    isLoading: false
+                };
+            }
+            if (ref?.path === 'users') {
+                return {
+                    data: [
+                        { id: 'op-1', role: 'operator', name: 'Operator 1', skills: ['Sewing'] },
+                        { id: 'op-2', role: 'operator', name: 'Operator 2', skills: ['Sewing'] }
+                    ],
+                    isLoading: false
+                };
+            }
+            return { data: [], isLoading: false };
+        });
+
+        mockSolveFluid.mockImplementation((style: any, assignments: any[], operators: any[]) => {
+            const result = new Map();
+            style.operations.forEach((op: any) => {
+                const assign = assignments.find((a: any) => a.operationId === op.id);
+                const assignedIds = assign ? assign.operatorIds : [];
+                result.set(op.id, {
+                    finalWeights: new Map(assignedIds.map((id: any) => [id, 1])),
+                    localOutput: 100,
+                    assignedOps: operators.filter((o: any) => assignedIds.includes(o.id))
+                });
+            });
+            return result;
+        });
+
+        mockSimulate.mockReturnValue({ schedule: {}, logs: [] });
+
+        render(<ProductionPlanner />);
+
+        fireEvent.click(screen.getAllByRole('combobox')[0]);
+        const styleOption = (await screen.findAllByText(/Variant Style/i))[0];
+        fireEvent.click(styleOption);
+
+        await waitFor(() => {
+            expect(screen.getByText('Variants')).toBeDefined();
+            expect(screen.getAllByText(/^Red$/).length).toBeGreaterThan(0);
+            expect(screen.getAllByText(/^Blue$/).length).toBeGreaterThan(0);
+        });
+
+        const commands = screen.getAllByTestId('command');
+        await waitFor(() => {
+            expect(within(commands[0]).getByText('Operator 1')).toBeDefined();
+            expect(within(commands[1]).getByText('Operator 2')).toBeDefined();
+        });
+        fireEvent.click(within(commands[0]).getByText('Operator 1'));
+        fireEvent.click(within(commands[1]).getByText('Operator 2'));
+
+        await waitFor(() => {
+            expect(mockSimulate).toHaveBeenCalled();
+            const lastCall = mockSimulate.mock.calls[mockSimulate.mock.calls.length - 1];
+            const simulationAssignments = lastCall[1];
+            expect(simulationAssignments.length).toBe(2);
+            expect(simulationAssignments[0][0].operatorIds).toContain('op-1');
+            expect(simulationAssignments[1][0].operatorIds).toContain('op-2');
+        });
+    });
+
     it('handles auto-assign and publish', async () => {
         render(<ProductionPlanner />);
         fireEvent.click(screen.getAllByRole('combobox')[0]);

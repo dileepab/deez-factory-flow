@@ -5,11 +5,13 @@ import type { GarmentStyle, Operator, Assignment } from '@/lib/types';
 export const unique = <T,>(arr: T[]) => Array.from(new Set(arr));
 
 export type HistoricalPerformanceMap = Record<string, Record<string, number>>;
-export type ThreadConstraintConfig = {
-    machineType: string;
+export type ThreadConstraintRule = {
     ballsPerMachine: number;
     availableByColor: Record<string, number>;
 };
+export type ThreadConstraintConfig =
+    | { machineRules: Record<string, ThreadConstraintRule> }
+    | { machineType: string; ballsPerMachine: number; availableByColor: Record<string, number> };
 
 const clamp = (value: number, min: number, max: number): number =>
     Math.max(min, Math.min(max, value));
@@ -144,13 +146,31 @@ export const simulateProductionSchedule = (
 
     const styles = legacyNextStyle ? [...baseStyles, legacyNextStyle] : baseStyles;
     const allAssignments = legacyNextStyle ? [...baseAssignments, parsedLegacyNextAssignments] : baseAssignments;
-    const normalizedThreadConstraints = threadConstraints && threadConstraints.machineType
-        ? {
-            machineType: threadConstraints.machineType.trim(),
-            ballsPerMachine: Math.max(1, Math.floor(threadConstraints.ballsPerMachine || 1)),
-            availableByColor: threadConstraints.availableByColor || {}
+    const normalizeThreadConstraintRule = (rule: Partial<ThreadConstraintRule> | undefined): ThreadConstraintRule => ({
+        ballsPerMachine: Math.max(1, Math.floor(rule?.ballsPerMachine || 1)),
+        availableByColor: rule?.availableByColor || {}
+    });
+    const normalizedThreadConstraints = (() => {
+        if (!threadConstraints) return undefined;
+
+        // Backward compatibility: single-machine config
+        if ('machineType' in threadConstraints) {
+            const machineType = threadConstraints.machineType?.trim();
+            if (!machineType) return undefined;
+            return {
+                [machineType]: normalizeThreadConstraintRule(threadConstraints)
+            } as Record<string, ThreadConstraintRule>;
         }
-        : undefined;
+
+        const rules: Record<string, ThreadConstraintRule> = {};
+        Object.entries(threadConstraints.machineRules || {}).forEach(([machineTypeRaw, rule]) => {
+            const machineType = machineTypeRaw.trim();
+            if (!machineType) return;
+            rules[machineType] = normalizeThreadConstraintRule(rule);
+        });
+
+        return Object.keys(rules).length > 0 ? rules : undefined;
+    })();
 
     // 1. Setup Logging & Output
     const logs: string[] = [];
@@ -168,7 +188,8 @@ export const simulateProductionSchedule = (
     const operatorLastMachine = new Map<string, string>();
     const operatorLastOpId = new Map<string, string>();
     const operatorLastColor = new Map<string, string>();
-    const threadMachineUsageByColor = new Map<string, number>();
+    const threadMachineUsageByMachineColor = new Map<string, number>();
+    const getThreadUsageKey = (machineType: string, color: string) => `${machineType}::${color}`;
 
     const schedule: Record<string, { start: number, end: number, opId: string, count: number, isNextStyle?: boolean, colorVariant?: string, styleIndex: number }[]> = {};
     operators.forEach(o => schedule[o.id] = []);
@@ -269,12 +290,22 @@ export const simulateProductionSchedule = (
 
         const userProcessedCounts = new Map<string, Map<string, number>>();
         operators.forEach(u => userProcessedCounts.set(u.id, new Map()));
-        const threadMachineCap = (() => {
+        const threadMachineCaps = (() => {
             const styleColor = style.colorVariant;
-            if (!normalizedThreadConstraints || !styleColor) return Number.POSITIVE_INFINITY;
-            const balls = normalizedThreadConstraints.availableByColor?.[styleColor];
-            if (typeof balls !== 'number' || !isFinite(balls)) return 0;
-            return Math.max(0, Math.floor(Math.max(0, balls) / normalizedThreadConstraints.ballsPerMachine));
+            const caps = new Map<string, number>();
+            if (!normalizedThreadConstraints || !styleColor) return caps;
+            Object.entries(normalizedThreadConstraints).forEach(([machineType, rule]) => {
+                const balls = rule.availableByColor?.[styleColor];
+                if (typeof balls !== 'number' || !isFinite(balls)) {
+                    caps.set(machineType, 0);
+                    return;
+                }
+                caps.set(
+                    machineType,
+                    Math.max(0, Math.floor(Math.max(0, balls) / rule.ballsPerMachine))
+                );
+            });
+            return caps;
         })();
 
         return {
@@ -285,7 +316,7 @@ export const simulateProductionSchedule = (
             inventory,
             remainingTargets,
             wipCaps,
-            threadMachineCap,
+            threadMachineCaps,
             userProcessedCounts,
             assignments
         };
@@ -293,6 +324,9 @@ export const simulateProductionSchedule = (
 
     const machineUsage = new Map<string, number>();
     const opState = new Map<string, { busyUntil: number, opId: string, startTick: number, count: number, styleIndex: number, colorVariant?: string }>();
+    const operatorIdleSince = new Map<string, number>();
+    const COLOR_SWITCH_GRACE_MINUTES = Math.max(10, switchDelay * 3);
+    const MIN_COLOR_SWITCH_BATCH = 12;
 
     // 3. Simulation Loop
     for (let t = 0; t < maxSimulationTicks; t++) {
@@ -331,11 +365,11 @@ export const simulateProductionSchedule = (
                 if (
                     normalizedThreadConstraints &&
                     state.colorVariant &&
-                    mType === normalizedThreadConstraints.machineType
+                    normalizedThreadConstraints[mType]
                 ) {
-                    const key = state.colorVariant;
-                    const currentThreadUse = threadMachineUsageByColor.get(key) || 1;
-                    threadMachineUsageByColor.set(key, Math.max(0, currentThreadUse - 1));
+                    const key = getThreadUsageKey(mType, state.colorVariant);
+                    const currentThreadUse = threadMachineUsageByMachineColor.get(key) || 1;
+                    threadMachineUsageByMachineColor.set(key, Math.max(0, currentThreadUse - 1));
                 }
 
                 const currentInv = meta.inventory.get(op.id) || 0;
@@ -352,16 +386,117 @@ export const simulateProductionSchedule = (
 
         // B. Assign Idle Operators
         operators.forEach(user => {
-            if (opState.has(user.id)) return;
+            if (opState.has(user.id)) {
+                operatorIdleSince.delete(user.id);
+                return;
+            }
 
             const att = operatorAttendance[user.id] || { startDelay: 0, shiftExtension: 0 };
             const startCheck = att.startDelay || 0;
             const endCheck = availableMinutes + (att.shiftExtension || 0);
 
-            if (t < startCheck || t >= endCheck) return;
+            if (t < startCheck || t >= endCheck) {
+                operatorIdleSince.delete(user.id);
+                return;
+            }
 
-            // Try assigning tasks in style order (0 -> 1 -> N)
-            for (let sIdx = 0; sIdx < styles.length; sIdx++) {
+            if (!operatorIdleSince.has(user.id)) {
+                operatorIdleSince.set(user.id, t);
+            }
+
+            const idleSince = operatorIdleSince.get(user.id);
+            const idleMinutes = idleSince === undefined ? 0 : Math.max(0, t - idleSince);
+
+            // Prefer staying on the last processed color to reduce avoidable thread/color changeovers.
+            const preferredColor = operatorLastColor.get(user.id);
+            const hasFeasibleTaskForColor = (color: string) => {
+                for (let colorStyleIdx = 0; colorStyleIdx < styles.length; colorStyleIdx++) {
+                    const style = styles[colorStyleIdx];
+                    if ((style.colorVariant || '') !== color) continue;
+                    const meta = styleMeta[colorStyleIdx];
+
+                    const myAssignments = meta.assignments.filter(a => a.operatorIds.includes(user.id));
+                    if (myAssignments.length === 0) continue;
+
+                    for (const assignment of myAssignments) {
+                        const op = style.operations.find(o => o.id === assignment.operationId);
+                        if (!op) continue;
+
+                        const succs = meta.successors.get(op.id) || [];
+                        const isFinal = succs.length === 0;
+                        const ownInventory = meta.inventory.get(op.id) || 0;
+                        const opWipCap = meta.wipCaps.get(op.id) || 15;
+                        const downstreamBlocked = succs.some(sId => {
+                            if (meta.finalOperationIds.has(sId)) return false;
+                            const succCap = meta.wipCaps.get(sId) || 15;
+                            return (meta.inventory.get(sId) || 0) >= succCap;
+                        });
+                        if (downstreamBlocked) continue;
+                        if (!isFinal && ownInventory >= opWipCap) continue;
+
+                        const mType = op.machineType.trim();
+                        const mUsed = machineUsage.get(mType) || 0;
+                        const mTotal = machineCounts[mType] || 1;
+                        if (mUsed >= mTotal) continue;
+
+                        const currentColor = style.colorVariant;
+                        if (
+                            normalizedThreadConstraints &&
+                            currentColor &&
+                            normalizedThreadConstraints[mType]
+                        ) {
+                            const threadCap = meta.threadMachineCaps.get(mType) ?? Number.POSITIVE_INFINITY;
+                            const threadUsed = threadMachineUsageByMachineColor.get(
+                                getThreadUsageKey(mType, currentColor)
+                            ) || 0;
+                            if (threadUsed >= threadCap) continue;
+                        }
+
+                        let maxInput = Infinity;
+                        const deps = meta.effectiveDependencies.get(op.id) || [];
+                        if (deps.length > 0) {
+                            const inputs = deps.map(d => meta.inventory.get(d) || 0);
+                            maxInput = Math.min(...inputs);
+                        }
+                        const leftToMake = meta.remainingTargets.get(op.id) || 0;
+                        if (leftToMake <= 0) continue;
+                        if (maxInput > leftToMake) maxInput = leftToMake;
+                        if (maxInput <= 0 && deps.length > 0) continue;
+
+                        const MIN_BATCH = 5;
+                        const isEndOfShift = (endCheck - t) < 60;
+                        const upstreamFinished = deps.every(dId => (meta.remainingTargets.get(dId) || 0) <= 0);
+                        if (maxInput < MIN_BATCH && !isEndOfShift && !upstreamFinished && deps.length) continue;
+
+                        const efficiency =
+                            ((user.efficiencyRating || 100) / 100) *
+                            getHistoricalMultiplier(historicalPerformance, user.id, op.id);
+                        const boundedEfficiency = clamp(efficiency, 0.45, 1.8);
+                        const smvMinutes = op.smv / 60;
+                        const minutesPerPc = smvMinutes / boundedEfficiency;
+                        const rawTargetBatch = Math.floor(20 / minutesPerPc);
+                        const targetPcs = Math.max(10, Math.min(100, rawTargetBatch));
+                        const actualPcs = Math.min(maxInput, targetPcs);
+                        if (actualPcs <= 0) continue;
+
+                        return true;
+                    }
+                }
+                return false;
+            };
+            const styleOrder = Array.from({ length: styles.length }, (_, idx) => idx);
+            if (preferredColor) {
+                const sameColor = styleOrder.filter(idx => (styles[idx].colorVariant || '') === preferredColor);
+                if (sameColor.length > 0 && sameColor.length < styleOrder.length) {
+                    const others = styleOrder.filter(idx => (styles[idx].colorVariant || '') !== preferredColor);
+                    styleOrder.splice(0, styleOrder.length, ...sameColor, ...others);
+                }
+            }
+            const hasPreferredColorFeasibleWork = !!preferredColor && hasFeasibleTaskForColor(preferredColor);
+            let userAssigned = false;
+
+            // Try assigning tasks in preferred style order.
+            for (const sIdx of styleOrder) {
                 const style = styles[sIdx];
                 const meta = styleMeta[sIdx];
 
@@ -423,13 +558,24 @@ export const simulateProductionSchedule = (
                     const mTotal = machineCounts[mType] || 1;
                     if (mUsed >= mTotal) continue;
                     const currentColor = style.colorVariant;
+                    const lastColor = operatorLastColor.get(user.id);
+                    const isColorSwitch = !!lastColor && !!currentColor && lastColor !== currentColor;
+                    if (
+                        isColorSwitch &&
+                        hasPreferredColorFeasibleWork &&
+                        idleMinutes < COLOR_SWITCH_GRACE_MINUTES
+                    ) {
+                        continue;
+                    }
                     if (
                         normalizedThreadConstraints &&
                         currentColor &&
-                        mType === normalizedThreadConstraints.machineType
+                        normalizedThreadConstraints[mType]
                     ) {
-                        const threadCap = meta.threadMachineCap;
-                        const threadUsed = threadMachineUsageByColor.get(currentColor) || 0;
+                        const threadCap = meta.threadMachineCaps.get(mType) ?? Number.POSITIVE_INFINITY;
+                        const threadUsed = threadMachineUsageByMachineColor.get(
+                            getThreadUsageKey(mType, currentColor)
+                        ) || 0;
                         if (threadUsed >= threadCap) continue;
                     }
 
@@ -468,6 +614,14 @@ export const simulateProductionSchedule = (
                     const actualPcs = Math.min(maxInput, targetPcs);
                     if (actualPcs <= 0) continue;
 
+                    // Avoid costly color swaps for very small runs unless we're close to shift end.
+                    if (
+                        isColorSwitch &&
+                        hasPreferredColorFeasibleWork &&
+                        actualPcs < MIN_COLOR_SWITCH_BATCH &&
+                        !isEndOfShift
+                    ) continue;
+
                     // Reserve target immediately to avoid over-allocation from concurrent claims.
                     const remainingBefore = meta.remainingTargets.get(op.id) || 0;
                     if (remainingBefore <= 0) continue;
@@ -478,7 +632,6 @@ export const simulateProductionSchedule = (
                     // Switch Delay
                     const lastType = operatorLastMachine.get(user.id);
                     const lastOpId = operatorLastOpId.get(user.id);
-                    const lastColor = operatorLastColor.get(user.id);
                     let delay = 0;
 
                     if (lastType && (lastType !== mType || (lastOpId && lastOpId !== op.id))) {
@@ -502,9 +655,13 @@ export const simulateProductionSchedule = (
                     if (
                         normalizedThreadConstraints &&
                         currentColor &&
-                        mType === normalizedThreadConstraints.machineType
+                        normalizedThreadConstraints[mType]
                     ) {
-                        threadMachineUsageByColor.set(currentColor, (threadMachineUsageByColor.get(currentColor) || 0) + 1);
+                        const key = getThreadUsageKey(mType, currentColor);
+                        threadMachineUsageByMachineColor.set(
+                            key,
+                            (threadMachineUsageByMachineColor.get(key) || 0) + 1
+                        );
                     }
                     operatorLastMachine.set(user.id, mType);
                     operatorLastOpId.set(user.id, op.id);
@@ -521,11 +678,16 @@ export const simulateProductionSchedule = (
                     }
 
                     assigned = true;
+                    userAssigned = true;
                     const styleTag = sIdx > 0 ? ' (NEXT)' : '';
                     log(`T=${t.toFixed(0)} CLAIM ${user.name} ${mType}. Task: ${op.name} (S${sIdx})${styleTag}. Batch: ${reservedPcs}.`);
                     break;
                 }
                 if (assigned) break; // Move to next operator
+            }
+
+            if (userAssigned) {
+                operatorIdleSince.delete(user.id);
             }
         });
 

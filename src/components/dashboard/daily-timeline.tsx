@@ -10,6 +10,8 @@ import { Plus, Check } from "lucide-react";
 interface Assignment {
     operationId: string;
     operatorIds: string[];
+    variantId?: string;
+    variantColor?: string;
 }
 
 interface ScheduleEvent {
@@ -130,7 +132,13 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
         }));
     };
 
-    const getHandoffMessage = (opId: string, isNextStyle: boolean, segmentCount: number, fromOperatorName?: string) => {
+    const getHandoffMessage = (
+        opId: string,
+        isNextStyle: boolean,
+        segmentCount: number,
+        fromOperatorName?: string,
+        segmentColorVariant?: string
+    ) => {
         const style = isNextStyle ? selectedNextStyle : selectedStyle;
         if (!style) return '';
 
@@ -146,8 +154,22 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
             return `From ${fromLabel}: send ${qty} pcs to Final QC / Finished Goods.`;
         }
 
+        const pickAssignmentForVariant = (operationId: string, colorVariant?: string) => {
+            const candidates = assignments.filter(a => a.operationId === operationId);
+            if (candidates.length === 0) return undefined;
+
+            const color = (colorVariant || '').trim().toLowerCase();
+            if (color) {
+                const exactColor = candidates.find(a => (a.variantColor || '').trim().toLowerCase() === color);
+                if (exactColor) return exactColor;
+            }
+
+            const generic = candidates.find(a => !a.variantId && !a.variantColor);
+            return generic || candidates[0];
+        };
+
         const targets = downstreamOps.map(nextOp => {
-            const assignment = assignments.find(a => a.operationId === nextOp.id);
+            const assignment = pickAssignmentForVariant(nextOp.id, segmentColorVariant || style.colorVariant);
             const downstreamOperatorIds = assignment?.operatorIds || [];
             if (downstreamOperatorIds.length === 0) return `${nextOp.name}: ${qty} pcs (Unassigned)`;
 
@@ -242,7 +264,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
     };
 
     // State for View Mode and Quick Log
-    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('vertical');
+    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('horizontal');
     const [quickLogOpen, setQuickLogOpen] = useState(false);
     const [selectedLogSegment, setSelectedLogSegment] = useState<any>(null);
     const [selectedLogOpId, setSelectedLogOpId] = useState<string>("");
@@ -462,7 +484,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                     color,
                                                     name: op.name,
                                                     styleLabel: getSegmentStyleLabel(isNext, ev.colorVariant),
-                                                    handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name),
+                                                    handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name, ev.colorVariant),
                                                     count: partCount,
                                                     start: cwStart,
                                                     end: cwEnd,
@@ -616,7 +638,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                         color,
                                                         name: op.name,
                                                         styleLabel: getSegmentStyleLabel(isNext, ev.colorVariant),
-                                                        handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name),
+                                                        handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name, ev.colorVariant),
                                                         count: partCount,
                                                         start: wallStart,
                                                         end: wallEnd,

@@ -256,7 +256,13 @@ function MachineManagementSection({ formData, setFormData }: { formData: Partial
   const handleRemoveMachine = (name: string) => {
     setFormData(prev => ({
       ...prev,
-      customMachineTypes: (prev.customMachineTypes || []).filter(t => t !== name)
+      customMachineTypes: (prev.customMachineTypes || []).filter(t => t !== name),
+      machineCounts: Object.fromEntries(
+        Object.entries(prev.machineCounts || {}).filter(([type]) => type !== name)
+      ),
+      machineThreadBallsPerMachine: Object.fromEntries(
+        Object.entries(prev.machineThreadBallsPerMachine || {}).filter(([type]) => type !== name)
+      )
     }));
   };
 
@@ -264,6 +270,20 @@ function MachineManagementSection({ formData, setFormData }: { formData: Partial
     setFormData(prev => ({
       ...prev,
       machineCounts: { ...prev.machineCounts, [name]: count }
+    }));
+  };
+
+  const getDefaultThreadBallsPerMachine = (type: string) => (
+    type.trim() === 'Overlock/Serger' ? 5 : 1
+  );
+
+  const handleThreadBallsChange = (name: string, balls: number) => {
+    setFormData(prev => ({
+      ...prev,
+      machineThreadBallsPerMachine: {
+        ...(prev.machineThreadBallsPerMachine || {}),
+        [name]: Math.max(1, balls)
+      }
     }));
   };
 
@@ -292,21 +312,38 @@ function MachineManagementSection({ formData, setFormData }: { formData: Partial
         {allTypes.map(type => {
           const isCustom = !STANDARD_TYPES.includes(type);
           const count = formData.machineCounts?.[type] ?? 5; // Default 5
+          const threadBalls = formData.machineThreadBallsPerMachine?.[type] ?? getDefaultThreadBallsPerMachine(type);
 
           return (
-            <div key={type} className="flex items-center gap-2 p-3 border rounded-md bg-card">
-              <div className="flex-1 overflow-hidden">
+            <div key={type} className="flex items-center gap-3 p-3 border rounded-md bg-card">
+              <div className="flex-1 overflow-hidden min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="font-medium text-sm truncate" title={type}>{type}</span>
                   {isCustom && <Badge variant="secondary" className="text-[10px] h-5 px-1">Custom</Badge>}
                 </div>
               </div>
-              <Input
-                type="number"
-                className="w-20 h-8 text-right"
-                value={count}
-                onChange={(e) => handleCountChange(type, parseInt(e.target.value) || 0)}
-              />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">Count</Label>
+                  <Input
+                    type="number"
+                    className="w-20 h-8 text-right"
+                    value={count}
+                    min={0}
+                    onChange={(e) => handleCountChange(type, parseInt(e.target.value) || 0)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-[10px] text-muted-foreground">Thread / Machine</Label>
+                  <Input
+                    type="number"
+                    className="w-24 h-8 text-right"
+                    value={threadBalls}
+                    min={1}
+                    onChange={(e) => handleThreadBallsChange(type, parseInt(e.target.value) || 1)}
+                  />
+                </div>
+              </div>
               {isCustom && (
                 <Button
                   variant="ghost"

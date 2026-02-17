@@ -20,6 +20,7 @@ export interface Configuration {
     holidays: string[]; // Array of dates in 'YYYY-MM-DD' format
     defaultSwitchDelay?: number; // Default delay in minutes when switching tasks/machines
     machineCounts?: Record<string, number>; // Inventory count per machine type
+    machineThreadBallsPerMachine?: Record<string, number>; // Thread balls required per machine by type
     customMachineTypes?: string[]; // User-defined machine types
 }
 
@@ -115,6 +116,8 @@ export interface ProductionEntry {
 export interface Assignment {
     operationId: string;
     operatorIds: string[];
+    variantId?: string;
+    variantColor?: string;
 }
 
 export interface ScheduleSegment {
