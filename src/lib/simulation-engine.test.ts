@@ -205,6 +205,378 @@ describe('Simulation Engine', () => {
         expect(totalDuration).toBeLessThanOrEqual(60);
     });
 
+    it('Thread Constraint: Limits same-color parallel overlock usage', () => {
+        const threadLimitedStyle: GarmentStyle = {
+            ...mockStyle,
+            colorVariant: 'Red',
+            operations: [
+                {
+                    id: 'op-overlock',
+                    name: 'Overlock Step',
+                    smv: 60,
+                    machineType: 'Overlock/Serger',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const assignments: Assignment[] = [
+            { operationId: 'op-overlock', operatorIds: ['op-1', 'op-2'] }
+        ];
+
+        const machineCounts = { 'Overlock/Serger': 3 };
+        const availableMinutes = 60;
+
+        const result = simulateProductionSchedule(
+            threadLimitedStyle,
+            assignments,
+            [mockOperator, mockOperator2],
+            machineCounts,
+            availableMinutes,
+            0,
+            {},
+            {},
+            [],
+            {
+                machineType: 'Overlock/Serger',
+                ballsPerMachine: 5,
+                availableByColor: { Red: 5 } // only enough for one concurrent machine
+            }
+        );
+
+        const scheduleA = result.schedule['op-1'] || [];
+        const scheduleB = result.schedule['op-2'] || [];
+
+        let totalDuration = 0;
+        scheduleA.forEach(s => totalDuration += (s.end - s.start));
+        scheduleB.forEach(s => totalDuration += (s.end - s.start));
+
+        // Thread cap should effectively force one-machine behavior for this color.
+        expect(totalDuration).toBeLessThanOrEqual(60);
+    });
+
+    it('Thread Constraint: Applies rules for non-overlock machine types', () => {
+        const lockstitchStyle: GarmentStyle = {
+            ...mockStyle,
+            colorVariant: 'Red',
+            operations: [
+                {
+                    id: 'op-lockstitch',
+                    name: 'Lockstitch Step',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const assignments: Assignment[] = [
+            { operationId: 'op-lockstitch', operatorIds: ['op-1', 'op-2'] }
+        ];
+
+        const machineCounts = { 'Single Needle Lockstitch': 3 };
+        const availableMinutes = 60;
+
+        const result = simulateProductionSchedule(
+            lockstitchStyle,
+            assignments,
+            [mockOperator, mockOperator2],
+            machineCounts,
+            availableMinutes,
+            0,
+            {},
+            {},
+            [],
+            {
+                machineRules: {
+                    'Single Needle Lockstitch': {
+                        ballsPerMachine: 1,
+                        availableByColor: { Red: 1 } // one concurrent machine for Red
+                    }
+                }
+            }
+        );
+
+        const scheduleA = result.schedule['op-1'] || [];
+        const scheduleB = result.schedule['op-2'] || [];
+
+        let totalDuration = 0;
+        scheduleA.forEach(s => totalDuration += (s.end - s.start));
+        scheduleB.forEach(s => totalDuration += (s.end - s.start));
+
+        expect(totalDuration).toBeLessThanOrEqual(60);
+    });
+
+    it('Color Stickiness: keeps an operator on the same variant when feasible', () => {
+        const redStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-red',
+            name: 'Style Red',
+            quantity: 60,
+            colorVariant: 'Red',
+            operations: [
+                {
+                    id: 'red-up',
+                    name: 'Red Upstream',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                },
+                {
+                    id: 'red-bind',
+                    name: 'Red Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: ['red-up'],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const blueStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-blue',
+            name: 'Style Blue',
+            quantity: 120,
+            colorVariant: 'Blue',
+            operations: [
+                {
+                    id: 'blue-bind',
+                    name: 'Blue Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const result = simulateProductionSchedule(
+            [redStyle, blueStyle],
+            [
+                [
+                    { operationId: 'red-up', operatorIds: ['op-2'] },
+                    { operationId: 'red-bind', operatorIds: ['op-1'] }
+                ],
+                [
+                    { operationId: 'blue-bind', operatorIds: ['op-1'] }
+                ]
+            ],
+            [mockOperator, mockOperator2],
+            { 'Single Needle Lockstitch': 10 },
+            120,
+            5
+        );
+
+        const op1Schedule = result.schedule['op-1'] || [];
+        expect(op1Schedule.length).toBeGreaterThanOrEqual(2);
+        expect(op1Schedule[0].colorVariant).toBe('Blue');
+        expect(op1Schedule[1].colorVariant).toBe('Blue');
+    });
+
+    it('Color Stickiness: falls back to another variant when preferred color has no work left', () => {
+        const redStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-red-fallback',
+            name: 'Style Red',
+            quantity: 60,
+            colorVariant: 'Red',
+            operations: [
+                {
+                    id: 'red-up-fallback',
+                    name: 'Red Upstream',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                },
+                {
+                    id: 'red-bind-fallback',
+                    name: 'Red Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: ['red-up-fallback'],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const blueStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-blue-fallback',
+            name: 'Style Blue',
+            quantity: 20, // one batch to force exhaustion of preferred color
+            colorVariant: 'Blue',
+            operations: [
+                {
+                    id: 'blue-bind-fallback',
+                    name: 'Blue Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const result = simulateProductionSchedule(
+            [redStyle, blueStyle],
+            [
+                [
+                    { operationId: 'red-up-fallback', operatorIds: ['op-2'] },
+                    { operationId: 'red-bind-fallback', operatorIds: ['op-1'] }
+                ],
+                [
+                    { operationId: 'blue-bind-fallback', operatorIds: ['op-1'] }
+                ]
+            ],
+            [mockOperator, mockOperator2],
+            { 'Single Needle Lockstitch': 10 },
+            120,
+            5
+        );
+
+        const op1Schedule = result.schedule['op-1'] || [];
+        expect(op1Schedule.length).toBeGreaterThanOrEqual(2);
+        expect(op1Schedule[0].colorVariant).toBe('Blue');
+        expect(op1Schedule[1].colorVariant).toBe('Red');
+    });
+
+    it('Color Stickiness: delays switching away when preferred color still has backlog', () => {
+        const blueStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-blue-hold',
+            name: 'Style Blue',
+            quantity: 120,
+            colorVariant: 'Blue',
+            operations: [
+                {
+                    id: 'blue-up-hold',
+                    name: 'Blue Upstream',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 80 // Pre-seeded enough buffer so blue remains feasible
+                },
+                {
+                    id: 'blue-bind-hold',
+                    name: 'Blue Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: ['blue-up-hold'],
+                    completedQuantity: 20
+                }
+            ]
+        };
+
+        const redStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-red-hold',
+            name: 'Style Red',
+            quantity: 120,
+            colorVariant: 'Red',
+            operations: [
+                {
+                    id: 'red-bind-hold',
+                    name: 'Red Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const result = simulateProductionSchedule(
+            [blueStyle, redStyle],
+            [
+                [
+                    { operationId: 'blue-bind-hold', operatorIds: ['op-1'] }
+                ],
+                [
+                    { operationId: 'red-bind-hold', operatorIds: ['op-1'] }
+                ]
+            ],
+            [mockOperator],
+            { 'Single Needle Lockstitch': 10 },
+            120,
+            5
+        );
+
+        const op1Schedule = result.schedule['op-1'] || [];
+        expect(op1Schedule.length).toBeGreaterThanOrEqual(2);
+        expect(op1Schedule[0].opId).toBe('blue-bind-hold');
+        expect(op1Schedule[1].opId).toBe('blue-bind-hold');
+    });
+
+    it('Color Stickiness: switches immediately when preferred color has backlog but no feasible work', () => {
+        const blueStarvedStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-blue-starved',
+            name: 'Style Blue',
+            quantity: 60,
+            colorVariant: 'Blue',
+            operations: [
+                {
+                    id: 'blue-up-starved',
+                    name: 'Blue Upstream',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 10
+                },
+                {
+                    id: 'blue-bind-starved',
+                    name: 'Blue Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: ['blue-up-starved'],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const redAvailableStyle: GarmentStyle = {
+            ...mockStyle,
+            id: 'style-red-available',
+            name: 'Style Red',
+            quantity: 60,
+            colorVariant: 'Red',
+            operations: [
+                {
+                    id: 'red-bind-available',
+                    name: 'Red Bind',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const switchDelay = 5;
+        const result = simulateProductionSchedule(
+            [blueStarvedStyle, redAvailableStyle],
+            [
+                [{ operationId: 'blue-bind-starved', operatorIds: ['op-1'] }],
+                [{ operationId: 'red-bind-available', operatorIds: ['op-1'] }]
+            ],
+            [mockOperator],
+            { 'Single Needle Lockstitch': 5 },
+            120,
+            switchDelay
+        );
+
+        const op1Schedule = result.schedule['op-1'] || [];
+        expect(op1Schedule.length).toBeGreaterThanOrEqual(2);
+        expect(op1Schedule[0].colorVariant).toBe('Blue');
+        expect(op1Schedule[1].colorVariant).toBe('Red');
+        expect(op1Schedule[1].start - op1Schedule[0].end).toBeLessThanOrEqual(switchDelay + 1);
+    });
+
     it('Capacity Solver: Should split time for one operator on two tasks', () => {
         const ops = [mockOperator];
         const assignArr = [

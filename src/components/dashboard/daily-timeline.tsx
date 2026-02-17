@@ -10,6 +10,18 @@ import { Plus, Check } from "lucide-react";
 interface Assignment {
     operationId: string;
     operatorIds: string[];
+    variantId?: string;
+    variantColor?: string;
+}
+
+interface ScheduleEvent {
+    start: number;
+    end: number;
+    opId: string;
+    count: number;
+    completed?: boolean;
+    styleIndex?: number;
+    colorVariant?: string;
 }
 
 interface DailyTimelineProps {
@@ -19,7 +31,7 @@ interface DailyTimelineProps {
     selectedNextStyle?: GarmentStyle; // Support Next Style
     flowMetrics: Record<string, any>;
     availableMinutes: number;
-    schedule?: Record<string, { start: number, end: number, opId: string, count: number, completed?: boolean, styleIndex?: number, colorVariant?: string }[]>;
+    schedule?: Record<string, ScheduleEvent[]>;
     productionLogs?: ProductionEntry[]; // Optional logs
     isOrderComplete?: boolean;
     switchDelay?: number;
@@ -120,7 +132,13 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
         }));
     };
 
-    const getHandoffMessage = (opId: string, isNextStyle: boolean, segmentCount: number, fromOperatorName?: string) => {
+    const getHandoffMessage = (
+        opId: string,
+        isNextStyle: boolean,
+        segmentCount: number,
+        fromOperatorName?: string,
+        segmentColorVariant?: string
+    ) => {
         const style = isNextStyle ? selectedNextStyle : selectedStyle;
         if (!style) return '';
 
@@ -136,8 +154,22 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
             return `From ${fromLabel}: send ${qty} pcs to Final QC / Finished Goods.`;
         }
 
+        const pickAssignmentForVariant = (operationId: string, colorVariant?: string) => {
+            const candidates = assignments.filter(a => a.operationId === operationId);
+            if (candidates.length === 0) return undefined;
+
+            const color = (colorVariant || '').trim().toLowerCase();
+            if (color) {
+                const exactColor = candidates.find(a => (a.variantColor || '').trim().toLowerCase() === color);
+                if (exactColor) return exactColor;
+            }
+
+            const generic = candidates.find(a => !a.variantId && !a.variantColor);
+            return generic || candidates[0];
+        };
+
         const targets = downstreamOps.map(nextOp => {
-            const assignment = assignments.find(a => a.operationId === nextOp.id);
+            const assignment = pickAssignmentForVariant(nextOp.id, segmentColorVariant || style.colorVariant);
             const downstreamOperatorIds = assignment?.operatorIds || [];
             if (downstreamOperatorIds.length === 0) return `${nextOp.name}: ${qty} pcs (Unassigned)`;
 
@@ -223,8 +255,16 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
         return parts;
     };
 
+    const canMergeEvents = (current: ScheduleEvent, next: ScheduleEvent) => {
+        if (next.opId !== current.opId) return false;
+        if (next.styleIndex !== current.styleIndex) return false;
+        if ((next.colorVariant || '') !== (current.colorVariant || '')) return false;
+        const gap = next.start - current.end;
+        return gap < 15;
+    };
+
     // State for View Mode and Quick Log
-    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('vertical');
+    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('horizontal');
     const [quickLogOpen, setQuickLogOpen] = useState(false);
     const [selectedLogSegment, setSelectedLogSegment] = useState<any>(null);
     const [selectedLogOpId, setSelectedLogOpId] = useState<string>("");
@@ -401,8 +441,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                         let current = { ...rawEvents[0] };
                                         for (let i = 1; i < rawEvents.length; i++) {
                                             const next = rawEvents[i];
-                                            const gap = next.start - current.end;
-                                            if (next.opId === current.opId && gap < 15) {
+                                            if (canMergeEvents(current, next)) {
                                                 current.end = next.end;
                                                 current.count += next.count;
                                             } else {
@@ -445,7 +484,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                     color,
                                                     name: op.name,
                                                     styleLabel: getSegmentStyleLabel(isNext, ev.colorVariant),
-                                                    handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name),
+                                                    handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name, ev.colorVariant),
                                                     count: partCount,
                                                     start: cwStart,
                                                     end: cwEnd,
@@ -566,8 +605,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                             let current = { ...rawEvents[0] };
                                             for (let i = 1; i < rawEvents.length; i++) {
                                                 const next = rawEvents[i];
-                                                const gap = next.start - current.end;
-                                                if (next.opId === current.opId && gap < 15) {
+                                                if (canMergeEvents(current, next)) {
                                                     current.end = next.end;
                                                     current.count += next.count;
                                                 } else {
@@ -600,7 +638,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                                         color,
                                                         name: op.name,
                                                         styleLabel: getSegmentStyleLabel(isNext, ev.colorVariant),
-                                                        handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name),
+                                                        handoffMessage: getHandoffMessage(op.id, isNext, partCount, user.name, ev.colorVariant),
                                                         count: partCount,
                                                         start: wallStart,
                                                         end: wallEnd,

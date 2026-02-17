@@ -33,13 +33,19 @@ import { firestore } from '@/firebase/client';
 import type { GarmentStyle, Operator, AnyUser, Assignment, ProductionEntry } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { useMachineTypes } from '@/hooks/use-machine-types';
-import { Loader2, UserPlus, X, CheckCircle2, AlertCircle, Wand2, ClipboardList, RefreshCcw } from 'lucide-react';
+import { Loader2, UserPlus, X, CheckCircle2, AlertCircle, Wand2, ClipboardList, RefreshCcw, ChevronDown, ChevronUp } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MultiSelect, Option } from '@/components/ui/multi-select';
 import { DailyTimeline } from './daily-timeline';
-import { simulateProductionSchedule, solveFluidCapacity, unique, type HistoricalPerformanceMap } from '@/lib/simulation-engine';
+import {
+    simulateProductionSchedule,
+    solveFluidCapacity,
+    unique,
+    type HistoricalPerformanceMap,
+    type ThreadConstraintConfig
+} from '@/lib/simulation-engine';
 import { useAuth } from "@/auth-provider";
 import { useToast } from "@/hooks/use-toast";
 import { doc, setDoc, Timestamp } from "firebase/firestore";
@@ -140,13 +146,45 @@ const PLANNING_OBJECTIVE_WEIGHTS = {
     multitask: 10,
 } as const;
 
+const OVERLOCK_MACHINE_TYPE = 'Overlock/Serger';
+const getDefaultBallsPerMachine = (machineType: string) =>
+    machineType.trim() === OVERLOCK_MACHINE_TYPE ? 5 : 1;
+
+type PlannerScope = 'primary' | 'next';
+type PlannerAssignmentScope = {
+    style: PlannerScope;
+    variantId?: string;
+};
+type SimulationStyleSlot = {
+    source: PlannerScope;
+    rootStyleId: string;
+    variantId?: string;
+    variantColor?: string;
+};
+
+const cloneAssignments = (items: Assignment[]): Assignment[] =>
+    items.map(item => ({
+        operationId: item.operationId,
+        operatorIds: [...item.operatorIds],
+        ...(item.variantId ? { variantId: item.variantId } : {}),
+        ...(item.variantColor ? { variantColor: item.variantColor } : {}),
+    }));
+const buildStyleVariantOpKey = (
+    source: PlannerScope,
+    rootStyleId: string,
+    variantId: string | undefined,
+    operationId: string
+) => `${source}::${rootStyleId}::${variantId || '__base'}::${operationId}`;
 
 
 export function ProductionPlanner(): React.ReactNode {
     const { user } = useAuth();
     const { toast } = useToast();
     const { data: config } = useConfiguration();
-    const { machineCounts: globalMachineCounts } = useMachineTypes();
+    const {
+        machineCounts: globalMachineCounts,
+        machineThreadBallsPerMachine: globalThreadBallsPerMachine
+    } = useMachineTypes();
     const [selectedStyleId, setSelectedStyleId] = useState<string>("");
     const [selectedNextStyleId, setSelectedNextStyleId] = useState<string>(""); // NEW: Next Style
     const [dailyTarget, setDailyTarget] = useState<number>(500);
@@ -162,14 +200,19 @@ export function ProductionPlanner(): React.ReactNode {
     const [isPublishing, setIsPublishing] = useState(false);
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
+    const [variantAssignments, setVariantAssignments] = useState<Record<string, Assignment[]>>({});
+    const [nextVariantAssignments, setNextVariantAssignments] = useState<Record<string, Assignment[]>>({});
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
     const [availableOperatorIds, setAvailableOperatorIds] = useState<string[]>([]);
     const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
+    const [enableThreadConstraints, setEnableThreadConstraints] = useState<boolean>(true);
+    const [threadInventoryByColor, setThreadInventoryByColor] = useState<Record<string, number>>({});
     const [operatorAttendance, setOperatorAttendance] = useState<Record<string, { startDelay: number, shiftExtension: number }>>({});
     const [shiftStartTime, setShiftStartTime] = useState<string>("07:30");
     const [enableRollingReplan, setEnableRollingReplan] = useState<boolean>(true);
     const [replanIntervalMinutes, setReplanIntervalMinutes] = useState<number>(60);
     const [lastReplanAt, setLastReplanAt] = useState<Date | null>(null);
+    const [showExecutionGuide, setShowExecutionGuide] = useState<boolean>(true);
 
     // Queries
     const stylesQuery = useMemoFirebase(
@@ -238,6 +281,88 @@ export function ProductionPlanner(): React.ReactNode {
         () => applyLiveProgressToStyle(selectedNextStyleRaw),
         [selectedNextStyleRaw, applyLiveProgressToStyle]
     );
+
+    const activeThreadColors = useMemo(() => {
+        const colors: string[] = [];
+        const collectColors = (style: GarmentStyle | undefined) => {
+            if (!style) return;
+            if (style.variants && style.variants.length > 0) {
+                style.variants.forEach(variant => {
+                    const color = variant.color?.trim();
+                    if (color) colors.push(color);
+                });
+                return;
+            }
+
+            const fallbackColor = style.colorVariant?.trim();
+            if (fallbackColor) colors.push(fallbackColor);
+        };
+
+        collectColors(selectedStyle);
+        collectColors(selectedNextStyle);
+        return unique(colors);
+    }, [selectedStyle, selectedNextStyle]);
+
+    const activeThreadMachineTypes = useMemo(() => {
+        const machineTypes = new Set<string>();
+        const collectMachineTypes = (style: GarmentStyle | undefined) => {
+            if (!style) return;
+            style.operations.forEach(op => {
+                const type = op.machineType?.trim();
+                if (type) machineTypes.add(type);
+            });
+        };
+
+        collectMachineTypes(selectedStyle);
+        collectMachineTypes(selectedNextStyle);
+        return Array.from(machineTypes);
+    }, [selectedStyle, selectedNextStyle]);
+
+    const defaultThreadBallsByMachine = useMemo(() => {
+        const next: Record<string, number> = {};
+        activeThreadMachineTypes.forEach(machineType => {
+            const configured = globalThreadBallsPerMachine[machineType];
+            next[machineType] = Math.max(
+                1,
+                Math.floor(
+                    typeof configured === 'number' && isFinite(configured)
+                        ? configured
+                        : getDefaultBallsPerMachine(machineType)
+                )
+            );
+        });
+        return next;
+    }, [activeThreadMachineTypes, globalThreadBallsPerMachine]);
+
+    const defaultThreadColorInventory = useMemo(() => {
+        const values = Object.values(defaultThreadBallsByMachine);
+        if (values.length === 0) return 1;
+        return Math.max(1, ...values);
+    }, [defaultThreadBallsByMachine]);
+
+    useEffect(() => {
+        if (activeThreadColors.length === 0) {
+            setThreadInventoryByColor(prev => (Object.keys(prev).length === 0 ? prev : {}));
+            return;
+        }
+
+        setThreadInventoryByColor(prev => {
+            const next: Record<string, number> = {};
+            activeThreadColors.forEach(color => {
+                next[color] = Math.max(0, Math.floor(prev[color] ?? defaultThreadColorInventory));
+            });
+
+            const prevKeys = Object.keys(prev);
+            const nextKeys = Object.keys(next);
+            const hasDifferentSize = prevKeys.length !== nextKeys.length;
+            const hasDifferentValue = nextKeys.some(key => prev[key] !== next[key]);
+
+            if (!hasDifferentSize && !hasDifferentValue) {
+                return prev;
+            }
+            return next;
+        });
+    }, [activeThreadColors, defaultThreadColorInventory]);
 
     const getStyleCompletedUnits = useCallback((style: GarmentStyle | undefined): number => {
         if (!style || !style.operations.length) return 0;
@@ -392,7 +517,13 @@ export function ProductionPlanner(): React.ReactNode {
     // Clear assignments when style changes
     useEffect(() => {
         setAssignments([]);
+        setVariantAssignments({});
     }, [selectedStyle?.id]);
+
+    useEffect(() => {
+        setNextAssignments([]);
+        setNextVariantAssignments({});
+    }, [selectedNextStyle?.id]);
 
     // Memoize operator loads for calculations
     const operatorLoads = useMemo(() => {
@@ -848,15 +979,85 @@ export function ProductionPlanner(): React.ReactNode {
         })).filter(a => a.operatorIds.length > 0);
     };
 
+    const buildVariantAssignmentMap = useCallback((style: GarmentStyle, baseAssigns: Assignment[]) => {
+        if (!style.variants || style.variants.length === 0) return {};
+        const map: Record<string, Assignment[]> = {};
+        style.variants.forEach(variant => {
+            map[variant.id] = cloneAssignments(baseAssigns).map(assignment => ({
+                ...assignment,
+                variantId: variant.id,
+                variantColor: variant.color,
+            }));
+        });
+        return map;
+    }, []);
+
+    const upsertOperatorInAssignmentList = useCallback((
+        list: Assignment[],
+        opId: string,
+        operatorId: string,
+        variantId?: string,
+        variantColor?: string
+    ) => {
+        const existing = list.find(a => a.operationId === opId);
+        if (existing) {
+            if (existing.operatorIds.includes(operatorId)) return list;
+            return list.map(a => a.operationId === opId ? { ...a, operatorIds: [...a.operatorIds, operatorId] } : a);
+        }
+        return [
+            ...list,
+            {
+                operationId: opId,
+                operatorIds: [operatorId],
+                ...(variantId ? { variantId } : {}),
+                ...(variantColor ? { variantColor } : {}),
+            }
+        ];
+    }, []);
+
+    const removeOperatorFromAssignmentList = useCallback((list: Assignment[], opId: string, operatorId: string) => {
+        return list
+            .map(a => {
+                if (a.operationId === opId) {
+                    return { ...a, operatorIds: a.operatorIds.filter(id => id !== operatorId) };
+                }
+                return a;
+            })
+            .filter(a => a.operatorIds.length > 0);
+    }, []);
+
+    const getAssignmentListForScope = useCallback((scope: PlannerAssignmentScope): Assignment[] => {
+        if (scope.style === 'next') {
+            if (scope.variantId) return nextVariantAssignments[scope.variantId] || [];
+            return nextAssignments;
+        }
+        if (scope.variantId) return variantAssignments[scope.variantId] || [];
+        return assignments;
+    }, [assignments, nextAssignments, variantAssignments, nextVariantAssignments]);
+
     // Actual Auto Assign Handler
     const handleAutoAssign = useCallback(() => {
         if (selectedStyle) {
-            setAssignments(computeAssignments(selectedStyle));
+            const computed = computeAssignments(selectedStyle);
+            setAssignments(computed);
+            setVariantAssignments(buildVariantAssignmentMap(selectedStyle, computed));
         }
         if (selectedNextStyle) {
-            setNextAssignments(computeAssignments(selectedNextStyle));
+            const computed = computeAssignments(selectedNextStyle);
+            setNextAssignments(computed);
+            setNextVariantAssignments(buildVariantAssignmentMap(selectedNextStyle, computed));
         }
-    }, [selectedStyle, selectedNextStyle, operators, availableOperatorIds, machineCounts, availableMinutes, operatorAttendance, learnedPerformance]);
+    }, [
+        selectedStyle,
+        selectedNextStyle,
+        operators,
+        availableOperatorIds,
+        machineCounts,
+        availableMinutes,
+        operatorAttendance,
+        learnedPerformance,
+        buildVariantAssignmentMap
+    ]);
 
     useEffect(() => {
         if (!enableRollingReplan || !selectedStyle) return;
@@ -869,44 +1070,79 @@ export function ProductionPlanner(): React.ReactNode {
         return () => window.clearInterval(timer);
     }, [enableRollingReplan, replanIntervalMinutes, handleAutoAssign, selectedStyle?.id, selectedNextStyle?.id]);
 
-    // Helper: Assign Operator (Supports both Primary and Next Style)
-    const handleAssignOperator = (opId: string, operatorId: string) => {
-        const isNext = selectedNextStyle?.operations.some(o => o.id === opId);
-        const setTarget = isNext ? setNextAssignments : setAssignments;
-
-        setTarget(prev => {
-            const existing = prev.find(a => a.operationId === opId);
-            if (existing) {
-                if (existing.operatorIds.includes(operatorId)) return prev;
-                return prev.map(a => a.operationId === opId ? { ...a, operatorIds: [...a.operatorIds, operatorId] } : a);
+    // Helper: Assign Operator (Supports style + variant scope)
+    const handleAssignOperator = (
+        opId: string,
+        operatorId: string,
+        scope: PlannerAssignmentScope,
+        variantColor?: string
+    ) => {
+        if (scope.style === 'next') {
+            if (scope.variantId) {
+                setNextVariantAssignments(prev => {
+                    const current = prev[scope.variantId!] || [];
+                    const updated = upsertOperatorInAssignmentList(current, opId, operatorId, scope.variantId, variantColor);
+                    return { ...prev, [scope.variantId!]: updated };
+                });
+                return;
             }
-            return [...prev, { operationId: opId, operatorIds: [operatorId] }];
-        });
+            setNextAssignments(prev => upsertOperatorInAssignmentList(prev, opId, operatorId));
+            return;
+        }
+
+        if (scope.variantId) {
+            setVariantAssignments(prev => {
+                const current = prev[scope.variantId!] || [];
+                const updated = upsertOperatorInAssignmentList(current, opId, operatorId, scope.variantId, variantColor);
+                return { ...prev, [scope.variantId!]: updated };
+            });
+            return;
+        }
+        setAssignments(prev => upsertOperatorInAssignmentList(prev, opId, operatorId));
     };
 
     // Helper: Remove Operator
-    const handleRemoveOperator = (opId: string, operatorId: string) => {
-        const isNext = selectedNextStyle?.operations.some(o => o.id === opId);
-        const setTarget = isNext ? setNextAssignments : setAssignments;
+    const handleRemoveOperator = (opId: string, operatorId: string, scope: PlannerAssignmentScope) => {
+        if (scope.style === 'next') {
+            if (scope.variantId) {
+                setNextVariantAssignments(prev => {
+                    const current = prev[scope.variantId!] || [];
+                    const updated = removeOperatorFromAssignmentList(current, opId, operatorId);
+                    return { ...prev, [scope.variantId!]: updated };
+                });
+                return;
+            }
+            setNextAssignments(prev => removeOperatorFromAssignmentList(prev, opId, operatorId));
+            return;
+        }
 
-        setTarget(prev => {
-            return prev.map(a => {
-                if (a.operationId === opId) {
-                    return { ...a, operatorIds: a.operatorIds.filter(id => id !== operatorId) };
-                }
-                return a;
-            }).filter(a => a.operatorIds.length > 0);
-        });
+        if (scope.variantId) {
+            setVariantAssignments(prev => {
+                const current = prev[scope.variantId!] || [];
+                const updated = removeOperatorFromAssignmentList(current, opId, operatorId);
+                return { ...prev, [scope.variantId!]: updated };
+            });
+            return;
+        }
+        setAssignments(prev => removeOperatorFromAssignmentList(prev, opId, operatorId));
     };
 
-    // Get assigned operators object for an operation (Checked against both lists)
-    const getAssignedOperators = (opId: string) => {
-        const isNext = selectedNextStyle?.operations.some(o => o.id === opId);
-        const targetList = isNext ? nextAssignments : assignments;
+    // Get assigned operators object for an operation + optional variant scope
+    const getAssignedOperators = (opId: string, scope: PlannerAssignmentScope) => {
+        const targetList = getAssignmentListForScope(scope);
         const assignment = targetList.find(a => a.operationId === opId);
         if (!assignment) return [];
         return assignment.operatorIds.map(id => operators.find(o => o.id === id)).filter(Boolean) as Operator[];
     };
+
+    const allPlannerAssignments = useMemo(() => {
+        return [
+            ...assignments,
+            ...Object.values(variantAssignments).flat(),
+            ...nextAssignments,
+            ...Object.values(nextVariantAssignments).flat()
+        ];
+    }, [assignments, variantAssignments, nextAssignments, nextVariantAssignments]);
 
     const handlePublishSchedule = async () => {
         if (!simResult || !simResult.schedule) return;
@@ -921,7 +1157,7 @@ export function ProductionPlanner(): React.ReactNode {
                 publishedAt: Timestamp.now(),
                 styleId: selectedStyleId,
                 ...(selectedNextStyleId && { nextStyleId: selectedNextStyleId }),
-                assignments: [...assignments, ...nextAssignments],
+                assignments: allPlannerAssignments,
                 schedules: simResult.schedule as unknown as Record<string, ScheduleSegment[]>
             };
 
@@ -1015,17 +1251,40 @@ export function ProductionPlanner(): React.ReactNode {
         [selectedNextStyle, nextAssignments, machineCounts, dailyTarget, availableMinutes, operators, operatorAttendance, learnedPerformance]
     );
 
+    const hasAnyScopedAssignments = useCallback(
+        (baseAssigns: Assignment[], byVariant: Record<string, Assignment[]>) => {
+            if (baseAssigns.length > 0) return true;
+            return Object.values(byVariant).some(items => items.length > 0);
+        },
+        []
+    );
+
     const buildSimulationInputs = useCallback((
         primaryStyle: GarmentStyle,
         primaryAssignments: Assignment[],
+        primaryVariantAssignments: Record<string, Assignment[]>,
         nextStyle?: GarmentStyle,
-        nextStyleAssignments: Assignment[] = []
+        nextStyleAssignments: Assignment[] = [],
+        nextStyleVariantAssignments: Record<string, Assignment[]> = {}
     ) => {
         const simulationStyles: GarmentStyle[] = [];
         const simulationAssignments: Assignment[][] = [];
+        const styleSlots: SimulationStyleSlot[] = [];
         const scalingFactor = 1;
 
-        const addStyle = (base: GarmentStyle, baseAssigns: Assignment[]) => {
+        const toSimulationAssignmentList = (items: Assignment[]) => (
+            items.map(item => ({
+                operationId: item.operationId,
+                operatorIds: [...item.operatorIds]
+            }))
+        );
+
+        const addStyle = (
+            source: PlannerScope,
+            base: GarmentStyle,
+            baseAssigns: Assignment[],
+            byVariantAssigns: Record<string, Assignment[]>
+        ) => {
             if (base.variants && base.variants.length > 0) {
                 base.variants.forEach(variant => {
                     simulationStyles.push({
@@ -1035,7 +1294,17 @@ export function ProductionPlanner(): React.ReactNode {
                         colorVariant: variant.color,
                         quantity: Math.ceil(variant.quantity * scalingFactor),
                     });
-                    simulationAssignments.push(baseAssigns);
+
+                    const scopedAssigns = byVariantAssigns[variant.id]?.length
+                        ? byVariantAssigns[variant.id]
+                        : baseAssigns;
+                    simulationAssignments.push(toSimulationAssignmentList(scopedAssigns));
+                    styleSlots.push({
+                        source,
+                        rootStyleId: base.id,
+                        variantId: variant.id,
+                        variantColor: variant.color,
+                    });
                 });
                 return;
             }
@@ -1044,48 +1313,103 @@ export function ProductionPlanner(): React.ReactNode {
                 ...base,
                 quantity: Math.ceil((base.quantity || 1000) * scalingFactor)
             });
-            simulationAssignments.push(baseAssigns);
+            simulationAssignments.push(toSimulationAssignmentList(baseAssigns));
+            styleSlots.push({
+                source,
+                rootStyleId: base.id,
+                variantColor: base.colorVariant
+            });
         };
 
-        addStyle(primaryStyle, primaryAssignments);
-        if (nextStyle) addStyle(nextStyle, nextStyleAssignments);
+        addStyle('primary', primaryStyle, primaryAssignments, primaryVariantAssignments);
+        if (nextStyle) {
+            addStyle('next', nextStyle, nextStyleAssignments, nextStyleVariantAssignments);
+        }
 
-        return { simulationStyles, simulationAssignments };
+        return { simulationStyles, simulationAssignments, styleSlots };
     }, []);
+
+    const threadConstraintConfig = useMemo<ThreadConstraintConfig | undefined>(() => {
+        if (!enableThreadConstraints || activeThreadColors.length === 0 || activeThreadMachineTypes.length === 0) {
+            return undefined;
+        }
+
+        const machineRules: Record<string, { ballsPerMachine: number; availableByColor: Record<string, number> }> = {};
+        activeThreadMachineTypes.forEach(machineType => {
+            const ballsPerMachine = defaultThreadBallsByMachine[machineType] ?? getDefaultBallsPerMachine(machineType);
+
+            const availableByColor: Record<string, number> = {};
+            activeThreadColors.forEach(color => {
+                const value = threadInventoryByColor[color];
+                availableByColor[color] = Math.max(0, Math.floor(value ?? defaultThreadColorInventory));
+            });
+
+            machineRules[machineType] = {
+                ballsPerMachine,
+                availableByColor
+            };
+        });
+
+        return { machineRules };
+    }, [
+        enableThreadConstraints,
+        activeThreadColors,
+        activeThreadMachineTypes,
+        defaultThreadBallsByMachine,
+        threadInventoryByColor,
+        defaultThreadColorInventory
+    ]);
+
+    const simulationInputSet = useMemo(() => {
+        if (!selectedStyle) return undefined;
+
+        const hasPrimaryAssignments = hasAnyScopedAssignments(assignments, variantAssignments);
+        if (!hasPrimaryAssignments) return undefined;
+
+        return buildSimulationInputs(
+            selectedStyle,
+            assignments,
+            variantAssignments,
+            selectedNextStyle,
+            nextAssignments,
+            nextVariantAssignments
+        );
+    }, [
+        selectedStyle,
+        assignments,
+        variantAssignments,
+        selectedNextStyle,
+        nextAssignments,
+        nextVariantAssignments,
+        buildSimulationInputs,
+        hasAnyScopedAssignments
+    ]);
 
     // Simulate Schedule for Visualization
     const simResult = useMemo(() => {
-        if (!selectedStyle || assignments.length === 0) return { schedule: {}, logs: [] };
-
-        const { simulationStyles, simulationAssignments } = buildSimulationInputs(
-            selectedStyle,
-            assignments,
-            selectedNextStyle,
-            nextAssignments
-        );
+        if (!simulationInputSet) return { schedule: {}, logs: [] };
 
         return simulateProductionSchedule(
-            simulationStyles,
-            simulationAssignments,
+            simulationInputSet.simulationStyles,
+            simulationInputSet.simulationAssignments,
             operators,
             machineCounts,
             availableMinutes,
             switchDelay,
             operatorAttendance,
-            learnedPerformance
+            learnedPerformance,
+            undefined,
+            threadConstraintConfig
         );
     }, [
-        selectedStyle,
-        assignments,
-        selectedNextStyle,
-        nextAssignments,
+        simulationInputSet,
         operators,
         machineCounts,
         availableMinutes,
         switchDelay,
         operatorAttendance,
         learnedPerformance,
-        buildSimulationInputs,
+        threadConstraintConfig,
         planningMode,
     ]);
 
@@ -1177,6 +1501,23 @@ export function ProductionPlanner(): React.ReactNode {
         return counts;
     }, [simResult.schedule]);
 
+    const scheduledCountPerStyleVariantOp = useMemo(() => {
+        const counts: Record<string, number> = {};
+        if (!simResult.schedule || !simulationInputSet) return counts;
+
+        Object.values(simResult.schedule).forEach(events => {
+            events.forEach(event => {
+                const styleIndex = typeof event.styleIndex === 'number' ? event.styleIndex : 0;
+                const slot = simulationInputSet.styleSlots[styleIndex];
+                if (!slot) return;
+                const key = buildStyleVariantOpKey(slot.source, slot.rootStyleId, slot.variantId, event.opId);
+                counts[key] = (counts[key] || 0) + event.count;
+            });
+        });
+
+        return counts;
+    }, [simResult.schedule, simulationInputSet]);
+
     const calculateBottleneckForSchedule = useCallback((
         primaryStyle: GarmentStyle | undefined,
         nextStyle: GarmentStyle | undefined,
@@ -1226,14 +1567,9 @@ export function ProductionPlanner(): React.ReactNode {
     }, []);
 
     const scenarioOutputs = useMemo(() => {
-        if (!selectedStyle || assignments.length === 0) return [];
+        if (!selectedStyle || !simulationInputSet) return [];
 
-        const { simulationStyles, simulationAssignments } = buildSimulationInputs(
-            selectedStyle,
-            assignments,
-            selectedNextStyle,
-            nextAssignments
-        );
+        const { simulationStyles, simulationAssignments } = simulationInputSet;
 
         const scenarios = [
             { id: 'conservative', label: 'Conservative', perfScale: 0.92, startDelayDelta: 10, shiftExtensionDelta: -15 },
@@ -1259,7 +1595,9 @@ export function ProductionPlanner(): React.ReactNode {
                 availableMinutes,
                 switchDelay,
                 adjustedAttendance,
-                scaleHistoricalPerformance(learnedPerformance, scenario.perfScale)
+                scaleHistoricalPerformance(learnedPerformance, scenario.perfScale),
+                undefined,
+                threadConstraintConfig
             );
 
             const output = calculateBottleneckForSchedule(selectedStyle, selectedNextStyle, simulated.schedule);
@@ -1273,15 +1611,14 @@ export function ProductionPlanner(): React.ReactNode {
     }, [
         selectedStyle,
         selectedNextStyle,
-        assignments,
-        nextAssignments,
+        simulationInputSet,
         operators,
         machineCounts,
         availableMinutes,
         switchDelay,
         operatorAttendance,
         learnedPerformance,
-        buildSimulationInputs,
+        threadConstraintConfig,
         calculateBottleneckForSchedule,
     ]);
 
@@ -2055,6 +2392,68 @@ export function ProductionPlanner(): React.ReactNode {
                             ))}
                         </div>
                     )}
+
+                    {selectedStyle && activeThreadColors.length > 0 && activeThreadMachineTypes.length > 0 && (
+                        <div className="p-4 mb-4 border rounded-md bg-slate-50 dark:bg-slate-900/50">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
+                                <div>
+                                    <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                                        Thread Inventory (Color Constraints)
+                                    </h4>
+                                    <p className="text-[11px] text-muted-foreground mt-1">
+                                        Enter total balls per color. Thread per machine comes from Settings {'->'} Machine Inventory.
+                                    </p>
+                                </div>
+                                <Button
+                                    size="sm"
+                                    variant={enableThreadConstraints ? "default" : "outline"}
+                                    onClick={() => setEnableThreadConstraints(prev => !prev)}
+                                >
+                                    {enableThreadConstraints ? 'Enabled' : 'Disabled'}
+                                </Button>
+                            </div>
+
+                            {enableThreadConstraints && (
+                                <div className="space-y-4">
+                                    <div className="flex flex-wrap gap-2">
+                                        {activeThreadMachineTypes.map(machineType => (
+                                            <Badge key={machineType} variant="outline" className="text-[10px]">
+                                                {machineType}: {defaultThreadBallsByMachine[machineType] ?? getDefaultBallsPerMachine(machineType)} balls/machine
+                                            </Badge>
+                                        ))}
+                                    </div>
+
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                        {activeThreadColors.map(color => (
+                                            <div key={color} className="space-y-1">
+                                                <label className="text-[10px] font-medium truncate block" title={color}>
+                                                    {color} (balls)
+                                                </label>
+                                                <Input
+                                                    type="number"
+                                                    className="h-7 text-xs bg-background"
+                                                    value={threadInventoryByColor[color] ?? defaultThreadColorInventory}
+                                                    min={0}
+                                                    onChange={(e) => {
+                                                        const value = Math.max(0, parseInt(e.target.value) || 0);
+                                                        setThreadInventoryByColor(prev => ({
+                                                            ...prev,
+                                                            [color]: value
+                                                        }));
+                                                    }}
+                                                />
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                            {!enableThreadConstraints && (
+                                <div className="text-[11px] text-muted-foreground">
+                                    Constraints are off. Enable to enforce per-machine color limits.
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {[
@@ -2071,6 +2470,7 @@ export function ProductionPlanner(): React.ReactNode {
                                 <TableHeader>
                                     <TableRow>
                                         <TableHead>Operation</TableHead>
+                                        <TableHead>Variants</TableHead>
                                         <TableHead>SMV</TableHead>
                                         <TableHead>Machine</TableHead>
                                         <TableHead className="text-right">Req. Operators</TableHead>
@@ -2080,9 +2480,8 @@ export function ProductionPlanner(): React.ReactNode {
                                     </TableRow>
                                 </TableHeader>
                                 <TableBody>
-                                    {style.operations.map(op => {
-                                        const metric = metrics[op.id];
-                                        if (!metric) return null;
+                                    {(() => {
+                                        const styleScope: PlannerScope = i === 0 ? 'primary' : 'next';
                                         const styleRemainingTarget = planningMode === 'capacity'
                                             ? (
                                                 style.id === selectedStyle?.id
@@ -2092,199 +2491,241 @@ export function ProductionPlanner(): React.ReactNode {
                                                         : dailyTarget
                                             )
                                             : dailyTarget;
-                                        const targetForDisplay = Math.max(0, styleRemainingTarget);
-                                        const isTargetMet = targetForDisplay > 0
-                                            ? (scheduledCountPerOp[op.id] || 0) >= targetForDisplay
-                                            : false;
-                                        const isNearTarget = targetForDisplay > 0
-                                            ? (scheduledCountPerOp[op.id] || 0) >= targetForDisplay * 0.8
-                                            : false;
+                                        const styleQty = Math.max(
+                                            1,
+                                            style.variants?.reduce((sum, variant) => sum + (variant.quantity || 0), 0) || style.quantity || 1
+                                        );
+                                        const hasVariants = !!style.variants?.length;
+                                        const styleVariants = hasVariants
+                                            ? style.variants!.map(variant => ({
+                                                variantId: variant.id,
+                                                variantColor: variant.color,
+                                                variantQuantity: variant.quantity || 0
+                                            }))
+                                            : [{
+                                                variantId: undefined as string | undefined,
+                                                variantColor: style.colorVariant || 'Base',
+                                                variantQuantity: style.quantity || 0
+                                            }];
 
-                                        return (
-                                            <TableRow key={op.id}>
-                                                <TableCell className="font-medium">
-                                                    <div className="flex flex-col">
-                                                        <span>{op.name}</span>
-                                                        {op.dependencies?.length > 0 && (
-                                                            <span className="text-[10px] text-muted-foreground">
-                                                                Dep: {op.dependencies.map(d => style.operations.find(o => o.id === d)?.name).join(', ')}
-                                                            </span>
-                                                        )}
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell>{(op.smv / 60).toFixed(2)} min</TableCell>
-                                                <TableCell><Badge variant="outline">{op.machineType}</Badge></TableCell>
-                                                <TableCell className="text-right font-bold">
-                                                    {metric.reqOperators.toFixed(2)}
-                                                </TableCell>
-                                                <TableCell>
-                                                    <div className="flex flex-wrap gap-2 items-center">
-                                                        {metric.assignedOps.map(opUser => {
-                                                            const weight = metric.operatorWeights?.get(opUser.id) || 1;
-                                                            const eff = (opUser.efficiencyRating || 100) * weight;
+                                        return style.operations.map(op => {
+                                            const metric = metrics[op.id] || {
+                                                localCapacity: 0,
+                                                upstreamLimit: Infinity,
+                                                effectiveOutput: 0,
+                                                isStarved: false,
+                                                assignedOps: [] as Operator[],
+                                                percentFilled: 0,
+                                                reqOperators: 0,
+                                                operatorWeights: new Map<string, number>()
+                                            };
+                                            const variantRows = styleVariants.map(variant => {
+                                                const scope: PlannerAssignmentScope = {
+                                                    style: styleScope,
+                                                    ...(variant.variantId ? { variantId: variant.variantId } : {})
+                                                };
+                                                const assignedOps = getAssignedOperators(op.id, scope);
+                                                const targetForDisplay = hasVariants
+                                                    ? Math.max(
+                                                        0,
+                                                        Math.floor((Math.max(0, styleRemainingTarget) * (variant.variantQuantity || 0)) / styleQty)
+                                                    )
+                                                    : Math.max(0, styleRemainingTarget);
+                                                const scheduledCount = variant.variantId
+                                                    ? Math.floor(
+                                                        scheduledCountPerStyleVariantOp[
+                                                        buildStyleVariantOpKey(styleScope, style.id, variant.variantId, op.id)
+                                                        ] || 0
+                                                    )
+                                                    : Math.floor(scheduledCountPerOp[op.id] || 0);
 
-                                                            return <Badge key={opUser.id} variant="secondary" className="flex items-center gap-1 pr-1" data-testid="operator-badge">
-                                                                {opUser.name}
-                                                                <span className="text-[10px] text-muted-foreground">({Math.round(eff)}%)</span>
-                                                                {operatorLoads[opUser.id] > 1 && (
-                                                                    <span className="text-[10px] text-amber-600 font-bold">
-                                                                        (x{operatorLoads[opUser.id]})
-                                                                    </span>
-                                                                )}
-                                                                <X
-                                                                    className="h-3 w-3 cursor-pointer hover:text-destructive"
-                                                                    onClick={() => handleRemoveOperator(op.id, opUser.id)}
-                                                                    data-testid="remove-operator"
-                                                                />
-                                                            </Badge>
+                                                return {
+                                                    ...variant,
+                                                    scope,
+                                                    assignedOps,
+                                                    targetForDisplay,
+                                                    scheduledCount,
+                                                };
+                                            });
 
-                                                        })}
+                                            const totalScheduled = variantRows.reduce((sum, row) => sum + row.scheduledCount, 0);
+                                            const totalTarget = hasVariants
+                                                ? variantRows.reduce((sum, row) => sum + row.targetForDisplay, 0)
+                                                : Math.max(0, styleRemainingTarget);
+                                            const isTargetMet = totalTarget > 0 ? totalScheduled >= totalTarget : false;
+                                            const isNearTarget = totalTarget > 0 ? totalScheduled >= totalTarget * 0.8 : false;
 
-                                                        <Popover>
-                                                            <PopoverTrigger asChild>
-                                                                <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full border border-dashed">
-                                                                    <UserPlus className="h-3 w-3" />
-                                                                </Button>
-                                                            </PopoverTrigger>
-                                                            <PopoverContent className="p-0 w-64" align="start" avoidPortal={true}>
-                                                                <Command>
-                                                                    <CommandInput placeholder="Search operator..." />
-                                                                    <ScrollArea className="h-[200px]">
-                                                                        <CommandEmpty>No skilled operators found.</CommandEmpty>
-                                                                        <CommandGroup heading="Skilled">
-                                                                            {operators
-                                                                                .filter(o => !metric.assignedOps.find(ao => ao.id === o.id)) // Not already assigned
-                                                                                .filter(o => o.skills?.includes(op.machineType)) // Has skill
-                                                                                .map(o => (
-                                                                                    <CommandItem key={o.id} onSelect={() => handleAssignOperator(op.id, o.id)}>
-                                                                                        <div className="flex flex-col">
-                                                                                            <span>{o.name}</span>
-                                                                                            <span className="text-xs text-muted-foreground">Eff: {o.efficiencyRating || 100}%</span>
-                                                                                        </div>
-                                                                                    </CommandItem>
-                                                                                ))}
-                                                                        </CommandGroup>
-                                                                        <CommandGroup heading="Other">
-                                                                            {operators
-                                                                                .filter(o => !metric.assignedOps.find(ao => ao.id === o.id))
-                                                                                .filter(o => !o.skills?.includes(op.machineType))
-                                                                                .map(o => (
-                                                                                    <CommandItem key={o.id} onSelect={() => handleAssignOperator(op.id, o.id)} className="opacity-50">
-                                                                                        <div className="flex flex-col">
-                                                                                            <span>{o.name}</span>
-                                                                                            <span className="text-xs text-muted-foreground">No matching skill</span>
-                                                                                        </div>
-                                                                                    </CommandItem>
-                                                                                ))}
-                                                                        </CommandGroup>
-                                                                    </ScrollArea>
-                                                                </Command>
-                                                            </PopoverContent>
-                                                        </Popover>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="text-right">
-                                                    <div className="flex flex-col items-end gap-0.5">
-                                                        <span className={`text-sm font-semibold ${isTargetMet
-                                                            ? 'text-green-600'
-                                                            : isNearTarget
+                                            return (
+                                                <TableRow key={op.id}>
+                                                    <TableCell className="font-medium">
+                                                        <div className="flex flex-col">
+                                                            <span>{op.name}</span>
+                                                            {op.dependencies?.length > 0 && (
+                                                                <span className="text-[10px] text-muted-foreground">
+                                                                    Dep: {op.dependencies.map(d => style.operations.find(o => o.id === d)?.name).join(', ')}
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {variantRows.map(variant => (
+                                                                <Badge key={`${op.id}-${variant.variantId || 'base'}-variant`} variant="outline" className="text-[10px]">
+                                                                    {variant.variantColor}
+                                                                </Badge>
+                                                            ))}
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell>{(op.smv / 60).toFixed(2)} min</TableCell>
+                                                    <TableCell><Badge variant="outline">{op.machineType}</Badge></TableCell>
+                                                    <TableCell className="text-right font-bold">
+                                                        {metric.reqOperators.toFixed(2)}
+                                                    </TableCell>
+                                                    <TableCell>
+                                                        <div className="space-y-2">
+                                                            {variantRows.map(variant => (
+                                                                <div key={`${op.id}-${variant.variantId || 'base'}-assign`} className="flex flex-wrap gap-2 items-center">
+                                                                    {hasVariants && (
+                                                                        <span className="text-[10px] text-muted-foreground min-w-[84px]">
+                                                                            {variant.variantColor}
+                                                                        </span>
+                                                                    )}
+                                                                    {variant.assignedOps.map(opUser => {
+                                                                        const weight = metric.operatorWeights?.get(opUser.id) || 1;
+                                                                        const eff = (opUser.efficiencyRating || 100) * weight;
+
+                                                                        return <Badge key={`${opUser.id}-${variant.variantId || 'base'}`} variant="secondary" className="flex items-center gap-1 pr-1" data-testid="operator-badge">
+                                                                            {opUser.name}
+                                                                            <span className="text-[10px] text-muted-foreground">({Math.round(eff)}%)</span>
+                                                                            {operatorLoads[opUser.id] > 1 && (
+                                                                                <span className="text-[10px] text-amber-600 font-bold">
+                                                                                    (x{operatorLoads[opUser.id]})
+                                                                                </span>
+                                                                            )}
+                                                                            <X
+                                                                                className="h-3 w-3 cursor-pointer hover:text-destructive"
+                                                                                onClick={() => handleRemoveOperator(op.id, opUser.id, variant.scope)}
+                                                                                data-testid="remove-operator"
+                                                                            />
+                                                                        </Badge>;
+                                                                    })}
+
+                                                                    <Popover>
+                                                                        <PopoverTrigger asChild>
+                                                                            <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full border border-dashed">
+                                                                                <UserPlus className="h-3 w-3" />
+                                                                            </Button>
+                                                                        </PopoverTrigger>
+                                                                        <PopoverContent className="p-0 w-64" align="start" avoidPortal={true}>
+                                                                            <Command>
+                                                                                <CommandInput placeholder="Search operator..." />
+                                                                                <ScrollArea className="h-[200px]">
+                                                                                    <CommandEmpty>No skilled operators found.</CommandEmpty>
+                                                                                    <CommandGroup heading="Skilled">
+                                                                                        {operators
+                                                                                            .filter(o => !variant.assignedOps.find(ao => ao.id === o.id))
+                                                                                            .filter(o => o.skills?.includes(op.machineType))
+                                                                                            .map(o => (
+                                                                                                <CommandItem
+                                                                                                    key={o.id}
+                                                                                                    onSelect={() => handleAssignOperator(op.id, o.id, variant.scope, variant.variantColor)}
+                                                                                                >
+                                                                                                    <div className="flex flex-col">
+                                                                                                        <span>{o.name}</span>
+                                                                                                        <span className="text-xs text-muted-foreground">Eff: {o.efficiencyRating || 100}%</span>
+                                                                                                    </div>
+                                                                                                </CommandItem>
+                                                                                            ))}
+                                                                                    </CommandGroup>
+                                                                                    <CommandGroup heading="Other">
+                                                                                        {operators
+                                                                                            .filter(o => !variant.assignedOps.find(ao => ao.id === o.id))
+                                                                                            .filter(o => !o.skills?.includes(op.machineType))
+                                                                                            .map(o => (
+                                                                                                <CommandItem
+                                                                                                    key={o.id}
+                                                                                                    onSelect={() => handleAssignOperator(op.id, o.id, variant.scope, variant.variantColor)}
+                                                                                                    className="opacity-50"
+                                                                                                >
+                                                                                                    <div className="flex flex-col">
+                                                                                                        <span>{o.name}</span>
+                                                                                                        <span className="text-xs text-muted-foreground">No matching skill</span>
+                                                                                                    </div>
+                                                                                                </CommandItem>
+                                                                                            ))}
+                                                                                    </CommandGroup>
+                                                                                </ScrollArea>
+                                                                            </Command>
+                                                                        </PopoverContent>
+                                                                    </Popover>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="text-right">
+                                                        <div className="flex flex-col items-end gap-0.5">
+                                                            <span className={`text-sm font-semibold ${isTargetMet
+                                                                ? 'text-green-600'
+                                                                : isNearTarget
                                                                 ? 'text-amber-600'
                                                                 : 'text-red-600'
-                                                            }`}>
-                                                            {Math.floor(scheduledCountPerOp[op.id] || 0)}
-                                                        </span>
-                                                        <span className="text-[10px] text-muted-foreground">
-                                                            / {targetForDisplay} units
-                                                        </span>
-                                                    </div>
-                                                </TableCell>
-                                                <TableCell className="text-center">
-                                                    <div className="flex flex-col items-center gap-1">
-                                                        {/* Status & Starvation */}
-                                                        {metric.isStarved ? (
-                                                            <div className="flex flex-col items-center justify-center text-amber-600" title={`Restricted by Flow`}>
-                                                                <AlertCircle className="h-4 w-4 mb-0.5" />
-                                                                <span className="text-[10px] font-bold">STARVED</span>
-                                                                <span className="text-[9px] opacity-80 whitespace-nowrap">
-                                                                    (Wait for {op.dependencies?.map(d => style.operations.find(o => o.id === d)?.name).join(',') || 'Input'})
-                                                                </span>
-                                                            </div>
-                                                        ) : targetForDisplay > 0 && metric.effectiveOutput >= targetForDisplay ? (
-                                                            <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
-                                                        ) : (
-                                                            <div className="flex items-center justify-center text-amber-500" title={`Local Capacity: ${Math.floor(metric.localCapacity)}`}>
-                                                                <span className="text-xs">{Math.round(metric.percentFilled)}% Cap</span>
-                                                            </div>
-                                                        )}
-
-                                                        {/* EXPERT: Flow Efficiency KPI */}
-                                                        {metric.localCapacity > 0 && (
-                                                            <Badge variant="outline" className={`text-[9px] h-4 px-1 ${(metric.effectiveOutput / metric.localCapacity) > 0.95 ? "bg-green-50 text-green-700 border-green-200" :
-                                                                (metric.effectiveOutput / metric.localCapacity) > 0.80 ? "bg-amber-50 text-amber-700 border-amber-200" :
-                                                                    "bg-red-50 text-red-700 border-red-200"
                                                                 }`}>
-                                                                Flow: {Math.round((metric.effectiveOutput / metric.localCapacity) * 100)}%
-                                                            </Badge>
-                                                        )}
-                                                    </div>
-                                                </TableCell>
-                                            </TableRow>
-                                        );
-                                    })}
+                                                                {totalScheduled}
+                                                            </span>
+                                                            <span className="text-[10px] text-muted-foreground">
+                                                                / {totalTarget} units
+                                                            </span>
+                                                            {hasVariants && (
+                                                                <div className="mt-1 space-y-0.5 text-[10px] text-muted-foreground text-right">
+                                                                    {variantRows.map(variant => (
+                                                                        <div key={`${op.id}-${variant.variantId || 'base'}-target`}>
+                                                                            {variant.variantColor}: {variant.scheduledCount} / {variant.targetForDisplay}
+                                                                        </div>
+                                                                    ))}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </TableCell>
+                                                    <TableCell className="text-center">
+                                                        <div className="flex flex-col items-center gap-1">
+                                                            {metric.isStarved ? (
+                                                                <div className="flex flex-col items-center justify-center text-amber-600" title={`Restricted by Flow`}>
+                                                                    <AlertCircle className="h-4 w-4 mb-0.5" />
+                                                                    <span className="text-[10px] font-bold">STARVED</span>
+                                                                    <span className="text-[9px] opacity-80 whitespace-nowrap">
+                                                                        (Wait for {op.dependencies?.map(d => style.operations.find(o => o.id === d)?.name).join(',') || 'Input'})
+                                                                    </span>
+                                                                </div>
+                                                            ) : totalTarget > 0 && totalScheduled >= totalTarget ? (
+                                                                <CheckCircle2 className="h-5 w-5 text-green-500 mx-auto" />
+                                                            ) : (
+                                                                <div className="flex items-center justify-center text-amber-500" title={`Local Capacity: ${Math.floor(metric.localCapacity)}`}>
+                                                                    <span className="text-xs">{Math.round(metric.percentFilled)}% Cap</span>
+                                                                </div>
+                                                            )}
+
+                                                            {metric.localCapacity > 0 && (
+                                                                <Badge variant="outline" className={`text-[9px] h-4 px-1 ${(metric.effectiveOutput / metric.localCapacity) > 0.95 ? "bg-green-50 text-green-700 border-green-200" :
+                                                                    (metric.effectiveOutput / metric.localCapacity) > 0.80 ? "bg-amber-50 text-amber-700 border-amber-200" :
+                                                                        "bg-red-50 text-red-700 border-red-200"
+                                                                    }`}>
+                                                                    Flow: {Math.round((metric.effectiveOutput / metric.localCapacity) * 100)}%
+                                                                </Badge>
+                                                            )}
+                                                        </div>
+                                                    </TableCell>
+                                                </TableRow>
+                                            );
+                                        });
+                                    })()}
                                 </TableBody>
                             </Table>
                         </div>
                     );
                 })}
 
-                {selectedStyle && instructions.length > 0 && (
-                    <Card className="mt-6 border-dashed shadow-sm">
-                        <CardHeader className="pb-3">
-                            <CardTitle className="flex items-center gap-2 text-base font-semibold">
-                                <ClipboardList className="h-5 w-5 text-indigo-500" />
-                                Operational Execution Guide
-                            </CardTitle>
-                        </CardHeader>
-                        <CardContent>
-                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                {instructions.map(inst => (
-                                    <div key={inst.operatorId} className={`relative p-4 rounded-lg border text-sm transition-colors ${inst.type === 'focus' ? 'bg-secondary/20 border-secondary/50' :
-                                        inst.type === 'flow' ? 'bg-amber-500/10 border-amber-500/30' :
-                                            'bg-blue-500/10 border-blue-500/30'
-                                        }`}>
-                                        <div className="flex items-center justify-between mb-2">
-                                            <div className="font-bold text-foreground">{inst.name}</div>
-                                            <Badge variant={inst.type === 'focus' ? 'secondary' : 'outline'} className="text-[10px] h-5">
-                                                {inst.type === 'focus' ? 'Single Role' : 'Multi-Task'}
-                                            </Badge>
-                                        </div>
-                                        <div className="mb-3 text-muted-foreground text-xs font-medium">
-                                            Assignments: {inst.operations.join(', ')}
-                                        </div>
-                                        <div className="flex items-start gap-2 bg-background/80 p-2 rounded border border-border/50">
-                                            {inst.type === 'focus' ? <CheckCircle2 className="h-4 w-4 mt-0.5 text-green-500 shrink-0" /> : <RefreshCcw className="h-4 w-4 mt-0.5 text-blue-500 shrink-0" />}
-                                            <p className="italic text-xs leading-relaxed text-foreground/90">{inst.advice}</p>
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                            {/* {simResult && simResult.logs && simResult.logs.length > 0 && (
-                                <div className="mt-6 p-4 bg-slate-950 text-green-400 text-xs font-mono h-64 overflow-y-auto rounded-md border border-slate-800 shadow-inner">
-                                    <h4 className="font-bold mb-2 pb-2 border-b border-green-900/50 sticky top-0 bg-slate-950 flex justify-between">
-                                        <span>Simulation Traces</span>
-                                        <span className="text-green-600">{simResult.logs.length} events</span>
-                                    </h4>
-                                    <div className="space-y-0.5">
-                                        {simResult.logs.map((L: string, i: number) => <div key={i} className="whitespace-nowrap font-mono">{L}</div>)}
-                                    </div>
-                                </div>
-                            )} */}
-                        </CardContent>
-                    </Card>
-                )}
-
                 {/* Visual Timeline */}
-                {selectedStyle && (assignments.length > 0 || nextAssignments.length > 0) && (
+                {selectedStyle && allPlannerAssignments.length > 0 && (
                     <>
                         <div className="flex items-center justify-between mb-4 mt-8">
                             <h3 className="text-lg font-semibold flex items-center gap-2">
@@ -2334,11 +2775,11 @@ export function ProductionPlanner(): React.ReactNode {
 
                         <DailyTimeline
                             assignedOperators={
-                                unique([...assignments, ...nextAssignments].flatMap(a => a.operatorIds))
+                                unique(allPlannerAssignments.flatMap(a => a.operatorIds))
                                     .map(id => operators.find(o => o.id === id)!)
                                     .filter(Boolean)
                             }
-                            assignments={[...assignments, ...nextAssignments]}
+                            assignments={allPlannerAssignments}
                             selectedStyle={selectedStyle}
                             selectedNextStyle={selectedNextStyle}
                             flowMetrics={{ ...flowMetrics, ...nextFlowMetrics }}
@@ -2353,6 +2794,63 @@ export function ProductionPlanner(): React.ReactNode {
                             switchDelay={switchDelay}
                         />
                     </>
+                )}
+
+                {selectedStyle && instructions.length > 0 && (
+                    <Card className="mt-6 border-dashed shadow-sm">
+                        <CardHeader className="pb-3">
+                            <div className="flex items-center justify-between gap-2">
+                                <CardTitle className="flex items-center gap-2 text-base font-semibold">
+                                    <ClipboardList className="h-5 w-5 text-indigo-500" />
+                                    Operational Execution Guide
+                                </CardTitle>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    onClick={() => setShowExecutionGuide(prev => !prev)}
+                                    className="h-7 px-2"
+                                >
+                                    {showExecutionGuide ? (
+                                        <>
+                                            <ChevronUp className="h-4 w-4 mr-1" />
+                                            Collapse
+                                        </>
+                                    ) : (
+                                        <>
+                                            <ChevronDown className="h-4 w-4 mr-1" />
+                                            Expand
+                                        </>
+                                    )}
+                                </Button>
+                            </div>
+                        </CardHeader>
+                        {showExecutionGuide && (
+                            <CardContent>
+                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                                    {instructions.map(inst => (
+                                        <div key={inst.operatorId} className={`relative p-4 rounded-lg border text-sm transition-colors ${inst.type === 'focus' ? 'bg-secondary/20 border-secondary/50' :
+                                            inst.type === 'flow' ? 'bg-amber-500/10 border-amber-500/30' :
+                                                'bg-blue-500/10 border-blue-500/30'
+                                            }`}>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="font-bold text-foreground">{inst.name}</div>
+                                                <Badge variant={inst.type === 'focus' ? 'secondary' : 'outline'} className="text-[10px] h-5">
+                                                    {inst.type === 'focus' ? 'Single Role' : 'Multi-Task'}
+                                                </Badge>
+                                            </div>
+                                            <div className="mb-3 text-muted-foreground text-xs font-medium">
+                                                Assignments: {inst.operations.join(', ')}
+                                            </div>
+                                            <div className="flex items-start gap-2 bg-background/80 p-2 rounded border border-border/50">
+                                                {inst.type === 'focus' ? <CheckCircle2 className="h-4 w-4 mt-0.5 text-green-500 shrink-0" /> : <RefreshCcw className="h-4 w-4 mt-0.5 text-blue-500 shrink-0" />}
+                                                <p className="italic text-xs leading-relaxed text-foreground/90">{inst.advice}</p>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            </CardContent>
+                        )}
+                    </Card>
                 )}
             </CardContent>
         </Card >
