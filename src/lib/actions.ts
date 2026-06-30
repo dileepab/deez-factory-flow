@@ -6,9 +6,7 @@ import { redirect } from 'next/navigation';
 import { auth, firestore } from '@/firebase/server';
 import { FIREBASE_AUTH_ERRORS } from './constants';
 import { UserRole, UserRoleSchema } from './types';
-import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
 import type { EfficiencyImprovementSuggestionsOutput } from '@/ai/flows/efficiency-improvement-suggestions';
-import { getLineBalancerSuggestions } from '@/ai/flows/line-balancer';
 import { LineBalancerInputSchema } from '@/ai/flows/line-balancer-schemas';
 import type { LineBalancerInput, LineBalancerOutput } from '@/ai/flows/line-balancer-schemas';
 
@@ -25,6 +23,17 @@ const signupSchema = z
   });
 
 const AI_ALLOWED_ROLES = new Set<UserRole>(['admin', 'supervisor']);
+const AI_API_KEY_ERROR =
+  'AI planning is not configured. Add GEMINI_API_KEY or GOOGLE_API_KEY to your local or deployment environment, then restart the server.';
+
+function hasAiApiKey() {
+  return Boolean(process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY);
+}
+
+function isMissingAiApiKeyError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.includes('GEMINI_API_KEY') || message.includes('GOOGLE_API_KEY');
+}
 
 async function getCurrentSessionUser(): Promise<{ uid: string; role: UserRole }> {
   const sessionCookie = (await cookies()).get('__session')?.value;
@@ -211,16 +220,26 @@ export async function logout() {
 }
 
 export async function getSuggestions(
-  productionData: string
+  productionData: string,
+  language = ''
 ): Promise<EfficiencyImprovementSuggestionsOutput | { error: string }> {
   try {
     await requireAiPlannerAccess();
+    if (!hasAiApiKey()) {
+      return { error: AI_API_KEY_ERROR };
+    }
+
+    const { getEfficiencyImprovementSuggestions } = await import('@/ai/flows/efficiency-improvement-suggestions');
     const suggestions = await getEfficiencyImprovementSuggestions({
       realTimeData: productionData,
-      language: ''
+      language
     });
     return suggestions;
   } catch (error: any) {
+    if (isMissingAiApiKeyError(error)) {
+      return { error: AI_API_KEY_ERROR };
+    }
+
     console.error('Error getting AI suggestions:', error);
     return {
       error: `Server error: ${error.message}`,
@@ -243,15 +262,23 @@ export async function runLineBalancer(
 ): Promise<LineBalancerOutput | { error: string }> {
   try {
     await requireAiPlannerAccess();
+    if (!hasAiApiKey()) {
+      return { error: AI_API_KEY_ERROR };
+    }
 
     const parsedInput = LineBalancerInputSchema.safeParse(input);
     if (!parsedInput.success) {
       throw new Error('Invalid line balancing input.');
     }
 
+    const { getLineBalancerSuggestions } = await import('@/ai/flows/line-balancer');
     const result = await getLineBalancerSuggestions(parsedInput.data);
     return validateLineBalancerOutput(parsedInput.data, result);
   } catch (error: any) {
+    if (isMissingAiApiKeyError(error)) {
+      return { error: AI_API_KEY_ERROR };
+    }
+
     console.error('Error running AI line balancer:', error);
     return {
       error: `Server error: ${error.message}`,

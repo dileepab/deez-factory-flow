@@ -1467,7 +1467,12 @@ export function AIProductionPlanner(): React.ReactNode {
 
             const result = await runLineBalancer(buildBalancerInput(selectedStyle));
             if ('error' in result) {
-                throw new Error(result.error);
+                toast({
+                    title: "AI Balancing Failed",
+                    description: result.error,
+                    variant: "destructive"
+                });
+                return;
             }
 
             const computedPrimary: Assignment[] = result.assignments.map(a => ({
@@ -1528,7 +1533,13 @@ export function AIProductionPlanner(): React.ReactNode {
                     });
 
                     const nextResult = await runLineBalancer(buildBalancerInput(selectedNextStyle, nextOperatorPool));
-                    if (!('error' in nextResult)) {
+                    if ('error' in nextResult) {
+                        toast({
+                            title: "Next Style AI Balancing Skipped",
+                            description: nextResult.error,
+                            variant: "destructive"
+                        });
+                    } else {
                         const computedNext: Assignment[] = nextResult.assignments.map(a => ({
                             operationId: a.operationId,
                             operatorIds: a.operatorIds
@@ -1548,7 +1559,6 @@ export function AIProductionPlanner(): React.ReactNode {
                     : "The line has been successfully optimized for maximum output.",
             });
         } catch (error: any) {
-            console.error("AI Balancing Error:", error);
             toast({
                 title: "AI Balancing Failed",
                 description: error.message || "Failed to optimize line using AI. Please try again.",
