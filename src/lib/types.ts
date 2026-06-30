@@ -1,5 +1,3 @@
-'use client';
-
 import { z } from 'zod';
 import { MACHINE_TYPES } from '@/lib/constants';
 
