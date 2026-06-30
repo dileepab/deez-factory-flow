@@ -156,6 +156,10 @@ const AUTO_ASSIGN_GUARD_OUTPUT_DROP_PCT = 0.03;
 const AUTO_ASSIGN_GUARD_WIP_RISE_PCT = 0.1;
 const AUTO_ASSIGN_GUARD_OUTPUT_DROP_UNITS = 3;
 const AUTO_ASSIGN_GUARD_WIP_RISE_UNITS = 10;
+const NEXT_STYLE_PRIMARY_OUTPUT_DROP_LIMIT_UNITS = 2;
+const NEXT_STYLE_PREP_WIP_MIN_UNITS = 20;
+const NEXT_STYLE_PREP_WIP_MAX_UNITS = 60;
+const NEXT_STYLE_PREP_WIP_OUTPUT_RATIO = 0.15;
 
 const OVERLOCK_MACHINE_TYPE = 'Overlock/Serger';
 const getDefaultBallsPerMachine = (machineType: string) =>
@@ -173,6 +177,76 @@ type SimulationStyleSlot = {
     variantId?: string;
     variantColor?: string;
 };
+export type PlanQuality = {
+    actualOutput: number;
+    primaryOutput: number;
+    nextOutput: number;
+    estimatedWip: number;
+    primaryWip: number;
+    nextWip: number;
+};
+export type NextStyleFlowDecision = {
+    kind: 'continuous' | 'prep' | 'blocked';
+    primaryDrop: number;
+    prepWipLimit: number;
+    reason: string;
+};
+
+export const getNextStylePrepWipLimit = (primaryOutput: number): number => {
+    const scaledLimit = Math.round(Math.max(0, primaryOutput) * NEXT_STYLE_PREP_WIP_OUTPUT_RATIO);
+    return clamp(scaledLimit, NEXT_STYLE_PREP_WIP_MIN_UNITS, NEXT_STYLE_PREP_WIP_MAX_UNITS);
+};
+
+export function assessNextStyleFlow(
+    primaryOnly: PlanQuality,
+    candidate: PlanQuality
+): NextStyleFlowDecision {
+    const primaryDrop = Math.max(0, primaryOnly.primaryOutput - candidate.primaryOutput);
+    const prepWipLimit = getNextStylePrepWipLimit(primaryOnly.primaryOutput);
+
+    if (primaryDrop > NEXT_STYLE_PRIMARY_OUTPUT_DROP_LIMIT_UNITS) {
+        return {
+            kind: 'blocked',
+            primaryDrop,
+            prepWipLimit,
+            reason: `Next style held because it reduces current style output by ${primaryDrop} pcs.`,
+        };
+    }
+
+    if (candidate.nextOutput > 0) {
+        return {
+            kind: 'continuous',
+            primaryDrop,
+            prepWipLimit,
+            reason: `Next style accepted with ${candidate.nextOutput} finished pcs and no material current-style loss.`,
+        };
+    }
+
+    if (candidate.nextWip > 0 && candidate.nextWip <= prepWipLimit) {
+        return {
+            kind: 'prep',
+            primaryDrop,
+            prepWipLimit,
+            reason: `Next style accepted as controlled prep WIP (${candidate.nextWip}/${prepWipLimit} pcs).`,
+        };
+    }
+
+    if (candidate.nextWip > prepWipLimit) {
+        return {
+            kind: 'blocked',
+            primaryDrop,
+            prepWipLimit,
+            reason: `Next style held because it creates ${candidate.nextWip} pcs WIP without finished output; prep cap is ${prepWipLimit} pcs.`,
+        };
+    }
+
+    return {
+        kind: 'blocked',
+        primaryDrop,
+        prepWipLimit,
+        reason: 'Next style held because no feasible idle-capacity work was found.',
+    };
+}
 
 const cloneAssignments = (items: Assignment[]): Assignment[] =>
     items.map(item => ({
@@ -267,6 +341,25 @@ const buildStyleVariantOpKey = (
     variantId: string | undefined,
     operationId: string
 ) => `${source}::${rootStyleId}::${variantId || '__base'}::${operationId}`;
+
+const buildRootStyleOpKey = (rootStyleId: string, operationId: string) =>
+    `${rootStyleId}::${operationId}`;
+
+const estimateStyleWip = (
+    style: GarmentStyle | undefined,
+    getCount: (styleId: string, operationId: string) => number
+) => {
+    if (!style) return 0;
+    let total = 0;
+    style.operations.forEach(op => {
+        const outputCount = getCount(style.id, op.id);
+        const successors = style.operations.filter(next => next.dependencies?.includes(op.id));
+        if (successors.length === 0) return;
+        const downstream = Math.min(...successors.map(next => getCount(style.id, next.id)));
+        total += Math.max(0, outputCount - downstream);
+    });
+    return total;
+};
 
 
 export function AIProductionPlanner(): React.ReactNode {
@@ -1130,22 +1223,6 @@ export function AIProductionPlanner(): React.ReactNode {
     }, [selectedStyle, selectedNextStyle, simResult.schedule]);
 
 
-    // Calculate actual scheduled completion count per operation from simulation
-    const scheduledCountPerOp = useMemo(() => {
-        const counts: Record<string, number> = {};
-        if (!simResult.schedule) return counts;
-
-        // Sum up all completion events for each operation
-        Object.values(simResult.schedule).forEach(events => {
-            events.forEach(ev => {
-                if (!counts[ev.opId]) counts[ev.opId] = 0;
-                counts[ev.opId] += ev.count;
-            });
-        });
-
-        return counts;
-    }, [simResult.schedule]);
-
     const scheduledCountPerStyleVariantOp = useMemo(() => {
         const counts: Record<string, number> = {};
         if (!simResult.schedule || !simulationInputSet) return counts;
@@ -1156,6 +1233,23 @@ export function AIProductionPlanner(): React.ReactNode {
                 const slot = simulationInputSet.styleSlots[styleIndex];
                 if (!slot) return;
                 const key = buildStyleVariantOpKey(slot.source, slot.rootStyleId, slot.variantId, event.opId);
+                counts[key] = (counts[key] || 0) + event.count;
+            });
+        });
+
+        return counts;
+    }, [simResult.schedule, simulationInputSet]);
+
+    const scheduledCountPerRootStyleOp = useMemo(() => {
+        const counts: Record<string, number> = {};
+        if (!simResult.schedule || !simulationInputSet) return counts;
+
+        Object.values(simResult.schedule).forEach(events => {
+            events.forEach(event => {
+                const styleIndex = typeof event.styleIndex === 'number' ? event.styleIndex : 0;
+                const slot = simulationInputSet.styleSlots[styleIndex];
+                if (!slot) return;
+                const key = buildRootStyleOpKey(slot.rootStyleId, event.opId);
                 counts[key] = (counts[key] || 0) + event.count;
             });
         });
@@ -1284,10 +1378,17 @@ export function AIProductionPlanner(): React.ReactNode {
         nextStyleAssignments: Assignment[],
         nextStyleVariantAssignments: Record<string, Assignment[]>,
         threadConfigOverride?: ThreadConstraintConfig
-    ) => {
+    ): PlanQuality | null => {
         if (!selectedStyle) return null;
         if (!hasAnyScopedAssignments(primaryAssignments, primaryVariantAssignments)) {
-            return { actualOutput: 0, estimatedWip: 0 };
+            return {
+                actualOutput: 0,
+                primaryOutput: 0,
+                nextOutput: 0,
+                estimatedWip: 0,
+                primaryWip: 0,
+                nextWip: 0,
+            };
         }
 
         const simInput = buildSimulationInputs(
@@ -1320,29 +1421,25 @@ export function AIProductionPlanner(): React.ReactNode {
                 const styleIndex = typeof event.styleIndex === 'number' ? event.styleIndex : 0;
                 const slot = simInput.styleSlots[styleIndex];
                 if (!slot) return;
-                const key = `${slot.rootStyleId}::${event.opId}`;
+                const key = buildRootStyleOpKey(slot.rootStyleId, event.opId);
                 countByStyleOp.set(key, (countByStyleOp.get(key) || 0) + event.count);
             });
         });
 
-        const estimateWipForStyle = (style?: GarmentStyle) => {
-            if (!style) return 0;
-            let total = 0;
-            style.operations.forEach(op => {
-                const opKey = `${style.id}::${op.id}`;
-                const outputCount = countByStyleOp.get(opKey) || 0;
-                const successors = style.operations.filter(next => next.dependencies?.includes(op.id));
-                if (successors.length === 0) return;
-                const downstream = Math.min(
-                    ...successors.map(next => countByStyleOp.get(`${style.id}::${next.id}`) || 0)
-                );
-                total += Math.max(0, outputCount - downstream);
-            });
-            return total;
-        };
+        const getCount = (styleId: string, operationId: string) =>
+            countByStyleOp.get(buildRootStyleOpKey(styleId, operationId)) || 0;
 
-        const estimatedWip = estimateWipForStyle(selectedStyle) + estimateWipForStyle(selectedNextStyle);
-        return { actualOutput, estimatedWip };
+        const primaryWip = estimateStyleWip(selectedStyle, getCount);
+        const nextWip = estimateStyleWip(selectedNextStyle, getCount);
+        const estimatedWip = primaryWip + nextWip;
+        return {
+            actualOutput,
+            primaryOutput: output.primary,
+            nextOutput: output.next,
+            estimatedWip,
+            primaryWip,
+            nextWip,
+        };
     }, [
         selectedStyle,
         selectedNextStyle,
@@ -1479,10 +1576,13 @@ export function AIProductionPlanner(): React.ReactNode {
                 operationId: a.operationId,
                 operatorIds: a.operatorIds
             }));
+            const computedPrimaryVariants = buildVariantAssignmentMap(selectedStyle, computedPrimary);
+            let nextBalanceDecision: NextStyleFlowDecision | null = null;
+            let nextBalanceError: string | null = null;
+            let combinedReasoning = result.reasoning;
 
             setAssignments(computedPrimary);
-            setVariantAssignments(buildVariantAssignmentMap(selectedStyle, computedPrimary));
-            setAiReasoning(result.reasoning);
+            setVariantAssignments(computedPrimaryVariants);
 
             // Continuous Flow: auto-assign the next style to soak up idle capacity —
             // but capacity-aware, so it does NOT steal the primary's bottleneck.
@@ -1495,7 +1595,16 @@ export function AIProductionPlanner(): React.ReactNode {
                     let constraintOperatorIds: string[] = [];
                     try {
                         const primarySim = simulateProductionSchedule(
-                            [selectedStyle], [computedPrimary], candidatesPool, machineCounts, availableMinutes, switchDelay
+                            [selectedStyle],
+                            [computedPrimary],
+                            candidatesPool,
+                            machineCounts,
+                            availableMinutes,
+                            switchDelay,
+                            operatorAttendance,
+                            learnedPerformance,
+                            undefined,
+                            threadConstraintConfig
                         );
                         const counts: Record<string, number> = {};
                         Object.values(primarySim.schedule).forEach((segs: any[]) =>
@@ -1529,34 +1638,78 @@ export function AIProductionPlanner(): React.ReactNode {
                     const nextOperatorPool = candidatesPool.map(o => {
                         if (!constraintOperatorIds.includes(o.id)) return o;
                         const uniqueSkills = (o.skills || []).filter(sk => skillHolderCount[sk] === 1);
-                        return uniqueSkills.length > 0 ? { ...o, skills: uniqueSkills } : o;
+                        return { ...o, skills: uniqueSkills };
                     });
 
                     const nextResult = await runLineBalancer(buildBalancerInput(selectedNextStyle, nextOperatorPool));
                     if ('error' in nextResult) {
-                        toast({
-                            title: "Next Style AI Balancing Skipped",
-                            description: nextResult.error,
-                            variant: "destructive"
-                        });
+                        nextBalanceError = nextResult.error;
+                        setNextAssignments([]);
+                        setNextVariantAssignments({});
                     } else {
                         const computedNext: Assignment[] = nextResult.assignments.map(a => ({
                             operationId: a.operationId,
                             operatorIds: a.operatorIds
                         }));
-                        setNextAssignments(computedNext);
-                        setNextVariantAssignments(buildVariantAssignmentMap(selectedNextStyle, computedNext));
+                        const computedNextVariants = buildVariantAssignmentMap(selectedNextStyle, computedNext, 'conservative');
+                        const primaryOnlyQuality = evaluatePlanQuality(
+                            computedPrimary,
+                            computedPrimaryVariants,
+                            [],
+                            {}
+                        );
+                        const candidateQuality = evaluatePlanQuality(
+                            computedPrimary,
+                            computedPrimaryVariants,
+                            computedNext,
+                            computedNextVariants
+                        );
+
+                        if (primaryOnlyQuality && candidateQuality) {
+                            nextBalanceDecision = assessNextStyleFlow(primaryOnlyQuality, candidateQuality);
+                        }
+
+                        if (nextBalanceDecision?.kind === 'continuous' || nextBalanceDecision?.kind === 'prep') {
+                            setNextAssignments(computedNext);
+                            setNextVariantAssignments(computedNextVariants);
+                        } else {
+                            setNextAssignments([]);
+                            setNextVariantAssignments({});
+                        }
                     }
                 } catch (nextErr) {
                     console.error("Next-style balancing failed:", nextErr);
+                    nextBalanceError = nextErr instanceof Error ? nextErr.message : "Next-style balancing failed.";
+                    setNextAssignments([]);
+                    setNextVariantAssignments({});
                 }
+            } else {
+                setNextAssignments([]);
+                setNextVariantAssignments({});
             }
 
+            if (selectedNextStyle) {
+                if (nextBalanceDecision) {
+                    combinedReasoning = `${combinedReasoning}\n\nNext style: ${nextBalanceDecision.reason}`;
+                } else if (nextBalanceError) {
+                    combinedReasoning = `${combinedReasoning}\n\nNext style skipped: ${nextBalanceError}`;
+                }
+            }
+            setAiReasoning(combinedReasoning);
+
+            const toastTitle = !selectedNextStyle
+                ? "Line Balanced by AI"
+                : nextBalanceDecision?.kind === 'continuous'
+                    ? "Both Styles Balanced by AI"
+                    : nextBalanceDecision?.kind === 'prep'
+                        ? "Current Style Balanced; Next Style Prep Scheduled"
+                        : "Current Style Balanced; Next Style Held";
+            const toastDescription = !selectedNextStyle
+                ? "The line has been successfully optimized for maximum output."
+                : nextBalanceDecision?.reason || nextBalanceError || "Next style was not assigned because no safe idle-capacity plan was found.";
             toast({
-                title: selectedNextStyle ? "Both Styles Balanced by AI" : "Line Balanced by AI",
-                description: selectedNextStyle
-                    ? "Primary style optimized and the next style assigned to soak up idle capacity."
-                    : "The line has been successfully optimized for maximum output.",
+                title: toastTitle,
+                description: toastDescription,
             });
         } catch (error: any) {
             toast({
@@ -1573,7 +1726,13 @@ export function AIProductionPlanner(): React.ReactNode {
         operators,
         availableOperatorIds,
         machineCounts,
+        availableMinutes,
+        switchDelay,
+        operatorAttendance,
+        learnedPerformance,
+        threadConstraintConfig,
         buildVariantAssignmentMap,
+        evaluatePlanQuality,
         toast
     ]);
 
@@ -1621,19 +1780,11 @@ export function AIProductionPlanner(): React.ReactNode {
             ? (productiveMachineMinutes / totalMachineCapacity) * 100
             : 0;
 
-        const estimateWipForStyle = (style?: GarmentStyle) => {
-            if (!style) return 0;
-            let total = 0;
-            style.operations.forEach(op => {
-                const output = scheduledCountPerOp[op.id] || 0;
-                const successors = style.operations.filter(next => next.dependencies?.includes(op.id));
-                if (successors.length === 0) return;
-                const downstream = Math.min(...successors.map(next => scheduledCountPerOp[next.id] || 0));
-                total += Math.max(0, output - downstream);
-            });
-            return total;
-        };
-        const estimatedWip = estimateWipForStyle(selectedStyle) + estimateWipForStyle(selectedNextStyle);
+        const getCount = (styleId: string, operationId: string) =>
+            scheduledCountPerRootStyleOp[buildRootStyleOpKey(styleId, operationId)] || 0;
+        const estimatedWip =
+            estimateStyleWip(selectedStyle, getCount) +
+            estimateStyleWip(selectedNextStyle, getCount);
 
         const [shiftHour, shiftMinute] = shiftStartTime.split(':').map(Number);
         const shiftStart = Number.isFinite(shiftHour) && Number.isFinite(shiftMinute)
@@ -1671,9 +1822,52 @@ export function AIProductionPlanner(): React.ReactNode {
         bottleneckOutput.next,
         availableMinutes,
         machineCounts,
-        scheduledCountPerOp,
+        scheduledCountPerRootStyleOp,
         todayProductionLogs,
         shiftStartTime,
+    ]);
+
+    const nextStyleWip = useMemo(() => {
+        const getCount = (styleId: string, operationId: string) =>
+            scheduledCountPerRootStyleOp[buildRootStyleOpKey(styleId, operationId)] || 0;
+        return estimateStyleWip(selectedNextStyle, getCount);
+    }, [selectedNextStyle, scheduledCountPerRootStyleOp]);
+
+    const nextStyleFlowStatus = useMemo(() => {
+        const hasNextAssignments = hasAnyScopedAssignments(nextAssignments, nextVariantAssignments);
+        if (!selectedNextStyle || !hasNextAssignments) return null;
+
+        if (bottleneckOutput.next > 0) {
+            return {
+                kind: 'continuous' as const,
+                badge: 'Continuous Flow',
+                title: 'Next style is flowing',
+                description: `${bottleneckOutput.next} finished next-style pcs are scheduled after protecting the current style.`,
+            };
+        }
+
+        if (nextStyleWip > 0) {
+            return {
+                kind: 'prep' as const,
+                badge: 'Prep WIP',
+                title: 'Next style is prep only',
+                description: `${Math.round(nextStyleWip)} pcs are staged for the next style, but no finished next-style output is scheduled yet.`,
+            };
+        }
+
+        return {
+            kind: 'blocked' as const,
+            badge: 'No Flow',
+            title: 'Next style is not feasible yet',
+            description: 'The current plan has next-style assignments, but the simulator did not schedule usable next-style work.',
+        };
+    }, [
+        selectedNextStyle,
+        nextAssignments,
+        nextVariantAssignments,
+        hasAnyScopedAssignments,
+        bottleneckOutput.next,
+        nextStyleWip,
     ]);
 
     const theoreticalCapacityPotential = useMemo(() => {
@@ -2085,6 +2279,26 @@ export function AIProductionPlanner(): React.ReactNode {
                             <div className="text-lg font-semibold">{planningKpis.scheduleAdherence.toFixed(0)}%</div>
                         </div>
                     </div>
+
+                    {nextStyleFlowStatus && (
+                        <div className={`p-3 border rounded-md ${
+                            nextStyleFlowStatus.kind === 'continuous'
+                                ? 'bg-emerald-50/60 border-emerald-200 dark:bg-emerald-950/10 dark:border-emerald-900/60'
+                                : nextStyleFlowStatus.kind === 'prep'
+                                    ? 'bg-amber-50/70 border-amber-200 dark:bg-amber-950/10 dark:border-amber-900/60'
+                                    : 'bg-destructive/5 border-destructive/20'
+                        }`}>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={nextStyleFlowStatus.kind === 'blocked' ? 'destructive' : 'outline'}>
+                                    {nextStyleFlowStatus.badge}
+                                </Badge>
+                                <span className="text-sm font-medium">{nextStyleFlowStatus.title}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                                {nextStyleFlowStatus.description}
+                            </p>
+                        </div>
+                    )}
 
                     {confidenceBand && (
                         <div className="p-3 border rounded-md bg-muted/20">
@@ -2525,7 +2739,17 @@ export function AIProductionPlanner(): React.ReactNode {
 
                 {[
                     { title: `Current Style: ${selectedStyle?.name}`, style: selectedStyle, metrics: flowMetrics },
-                    { title: `Next Style: ${selectedNextStyle?.name} (Continuous Flow)`, style: selectedNextStyle, metrics: nextFlowMetrics }
+                    {
+                        title: `Next Style: ${selectedNextStyle?.name} (${
+                            nextStyleFlowStatus?.kind === 'prep'
+                                ? 'Prep WIP'
+                                : nextStyleFlowStatus?.kind === 'blocked'
+                                    ? 'No Flow'
+                                    : 'Continuous Flow'
+                        })`,
+                        style: selectedNextStyle,
+                        metrics: nextFlowMetrics
+                    }
                 ].map(({ title, style, metrics }, i) => {
                     if (!style) return null;
                     return (
@@ -2604,7 +2828,11 @@ export function AIProductionPlanner(): React.ReactNode {
                                                         buildStyleVariantOpKey(styleScope, style.id, variant.variantId, op.id)
                                                         ] || 0
                                                     )
-                                                    : Math.floor(scheduledCountPerOp[op.id] || 0);
+                                                    : Math.floor(
+                                                        scheduledCountPerRootStyleOp[
+                                                        buildRootStyleOpKey(style.id, op.id)
+                                                        ] || 0
+                                                    );
 
                                                 return {
                                                     ...variant,
