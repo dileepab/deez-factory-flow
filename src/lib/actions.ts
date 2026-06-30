@@ -8,8 +8,9 @@ import { FIREBASE_AUTH_ERRORS } from './constants';
 import { UserRole, UserRoleSchema } from './types';
 import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
 import type { EfficiencyImprovementSuggestionsOutput } from '@/ai/flows/efficiency-improvement-suggestions';
-import { getLineBalancerSuggestions, LineBalancerInputSchema } from '@/ai/flows/line-balancer';
-import type { LineBalancerInput, LineBalancerOutput } from '@/ai/flows/line-balancer';
+import { getLineBalancerSuggestions } from '@/ai/flows/line-balancer';
+import { LineBalancerInputSchema } from '@/ai/flows/line-balancer-schemas';
+import type { LineBalancerInput, LineBalancerOutput } from '@/ai/flows/line-balancer-schemas';
 
 const signupSchema = z
   .object({
