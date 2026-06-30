@@ -5,9 +5,11 @@ import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { auth, firestore } from '@/firebase/server';
 import { FIREBASE_AUTH_ERRORS } from './constants';
-import { UserRoleSchema, Operator } from './types';
+import { UserRole, UserRoleSchema } from './types';
 import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
 import type { EfficiencyImprovementSuggestionsOutput } from '@/ai/flows/efficiency-improvement-suggestions';
+import { getLineBalancerSuggestions, LineBalancerInputSchema } from '@/ai/flows/line-balancer';
+import type { LineBalancerInput, LineBalancerOutput } from '@/ai/flows/line-balancer';
 
 const signupSchema = z
   .object({
@@ -20,6 +22,111 @@ const signupSchema = z
     message: "Passwords don't match.",
     path: ['confirm-password'],
   });
+
+const AI_ALLOWED_ROLES = new Set<UserRole>(['admin', 'supervisor']);
+
+async function getCurrentSessionUser(): Promise<{ uid: string; role: UserRole }> {
+  const sessionCookie = (await cookies()).get('__session')?.value;
+  if (!sessionCookie) {
+    throw new Error('Authentication required.');
+  }
+
+  const decodedClaims = await auth.verifySessionCookie(sessionCookie, true);
+  const uid = decodedClaims.uid || decodedClaims.sub;
+  if (!uid) {
+    throw new Error('Invalid session.');
+  }
+
+  const userDoc = await firestore.collection('users').doc(uid).get();
+  const role = userDoc.get('role') || decodedClaims.role;
+  const parsedRole = UserRoleSchema.safeParse(role);
+  if (!parsedRole.success) {
+    throw new Error('User role is not configured.');
+  }
+
+  return { uid, role: parsedRole.data };
+}
+
+async function requireAiPlannerAccess() {
+  const currentUser = await getCurrentSessionUser();
+  if (!AI_ALLOWED_ROLES.has(currentUser.role)) {
+    throw new Error('You do not have permission to use AI planning.');
+  }
+  return currentUser;
+}
+
+function validateLineBalancerOutput(
+  input: LineBalancerInput,
+  output: LineBalancerOutput
+): LineBalancerOutput {
+  const operationsById = new Map(input.style.operations.map(operation => [operation.id, operation]));
+  const operatorsById = new Map(input.operators.map(operator => [operator.id, operator]));
+  const seenOperations = new Set<string>();
+  const machineOperators = new Map<string, Set<string>>();
+
+  if (input.style.operations.length === 0) {
+    throw new Error('Cannot balance a style with no operations.');
+  }
+  if (input.style.operations.length > 100 || input.operators.length > 200) {
+    throw new Error('AI planning input is too large. Please reduce the planning scope.');
+  }
+
+  const assignments = output.assignments.map(assignment => {
+    const operation = operationsById.get(assignment.operationId);
+    if (!operation) {
+      throw new Error(`AI returned an unknown operation: ${assignment.operationId}.`);
+    }
+    if (seenOperations.has(assignment.operationId)) {
+      throw new Error(`AI returned duplicate assignments for operation: ${operation.name}.`);
+    }
+
+    const operatorIds = Array.from(new Set(assignment.operatorIds.filter(Boolean)));
+    if (operatorIds.length === 0) {
+      throw new Error(`AI left operation "${operation.name}" without an operator.`);
+    }
+
+    operatorIds.forEach(operatorId => {
+      const operator = operatorsById.get(operatorId);
+      if (!operator) {
+        throw new Error(`AI returned an unknown operator for "${operation.name}".`);
+      }
+      if (!operator.skills.includes(operation.machineType)) {
+        throw new Error(`AI assigned ${operator.name} to "${operation.name}" without the required ${operation.machineType} skill.`);
+      }
+
+      const operatorsForMachine = machineOperators.get(operation.machineType) || new Set<string>();
+      operatorsForMachine.add(operatorId);
+      machineOperators.set(operation.machineType, operatorsForMachine);
+    });
+
+    seenOperations.add(assignment.operationId);
+    return {
+      operationId: assignment.operationId,
+      operatorIds,
+    };
+  });
+
+  input.style.operations.forEach(operation => {
+    if (!seenOperations.has(operation.id)) {
+      throw new Error(`AI did not assign operation "${operation.name}".`);
+    }
+  });
+
+  machineOperators.forEach((operatorIds, machineType) => {
+    const availableCount = input.machineCounts[machineType];
+    if (!Number.isFinite(availableCount) || availableCount < 1) {
+      throw new Error(`Machine count is not configured for ${machineType}.`);
+    }
+    if (operatorIds.size > availableCount) {
+      throw new Error(`AI used ${operatorIds.size} ${machineType} operators, but only ${availableCount} machines are available.`);
+    }
+  });
+
+  return {
+    assignments,
+    reasoning: output.reasoning.trim(),
+  };
+}
 
 export async function signup(prevState: any, formData: FormData) {
   const validatedFields = signupSchema.safeParse({
@@ -106,6 +213,7 @@ export async function getSuggestions(
   productionData: string
 ): Promise<EfficiencyImprovementSuggestionsOutput | { error: string }> {
   try {
+    await requireAiPlannerAccess();
     const suggestions = await getEfficiencyImprovementSuggestions({
       realTimeData: productionData,
       language: ''
@@ -126,5 +234,26 @@ export async function promoteToSupervisor(userId: string) {
   } catch (error: any) {
     console.error('Error promoting user to supervisor:', error);
     throw new Error('Failed to promote user');
+  }
+}
+
+export async function runLineBalancer(
+  input: LineBalancerInput
+): Promise<LineBalancerOutput | { error: string }> {
+  try {
+    await requireAiPlannerAccess();
+
+    const parsedInput = LineBalancerInputSchema.safeParse(input);
+    if (!parsedInput.success) {
+      throw new Error('Invalid line balancing input.');
+    }
+
+    const result = await getLineBalancerSuggestions(parsedInput.data);
+    return validateLineBalancerOutput(parsedInput.data, result);
+  } catch (error: any) {
+    console.error('Error running AI line balancer:', error);
+    return {
+      error: `Server error: ${error.message}`,
+    };
   }
 }

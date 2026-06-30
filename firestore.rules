@@ -2,36 +2,84 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-
-    // Helper function to get the user's role from the 'users' collection.
-    function getUserRole(userId) {
-      return get(/databases/$(database)/documents/users/$(userId)).data.role;
+    function signedIn() {
+      return request.auth != null;
     }
 
-    // Rules for the 'users' collection.
+    function userRole() {
+      return signedIn()
+        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
+        : null;
+    }
+
+    function isAdmin() {
+      return userRole() == 'admin';
+    }
+
+    function isSupervisor() {
+      return userRole() == 'supervisor';
+    }
+
+    function isOperator() {
+      return userRole() == 'operator';
+    }
+
+    function isPlanner() {
+      return isAdmin() || isSupervisor();
+    }
+
+    function isStaff() {
+      return isAdmin() || isSupervisor() || isOperator();
+    }
+
+    function roleIsUnchanged() {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny(['role']);
+    }
+
     match /users/{userId} {
-      // Allow users to read their own user document.
-      allow read: if request.auth.uid == userId;
-      // Allow users to create their own user document upon signup.
-      allow create: if request.auth.uid == userId;
+      allow get: if signedIn() && (request.auth.uid == userId || isPlanner());
+      allow list: if isPlanner();
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'operator';
+      allow update: if signedIn()
+        && (
+          isAdmin()
+          || (request.auth.uid == userId && roleIsUnchanged())
+        );
+      allow delete: if isAdmin();
     }
 
-    // Rules for the 'operators' collection.
     match /operators/{operatorId} {
-      // Allow authenticated users to read and write to the operators collection.
-      allow read, write: if request.auth != null;
+      allow read: if isPlanner();
+      allow write: if isAdmin();
     }
 
-    // Rules for the 'styles' collection.
     match /styles/{styleId} {
-        // Allow authenticated users to read and write to the styles collection.
-        allow read, write: if request.auth != null;
+      allow read: if isStaff();
+      allow write: if isPlanner();
     }
 
-    // Rules for other collections (e.g., production data, etc.)
-    // These can be further restricted based on user roles (admin, supervisor, operator).
+    match /production/{entryId} {
+      allow get: if isPlanner() || (signedIn() && resource.data.operatorId == request.auth.uid);
+      allow list: if isPlanner();
+      allow create: if isPlanner()
+        || (signedIn() && request.resource.data.operatorId == request.auth.uid);
+      allow update, delete: if isPlanner();
+    }
+
+    match /daily_plans/{planId} {
+      allow read: if isStaff();
+      allow write: if isPlanner();
+    }
+
+    match /configuration/{configId} {
+      allow read: if isStaff();
+      allow write: if isAdmin();
+    }
+
     match /{document=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
     }
   }
 }

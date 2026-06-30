@@ -309,6 +309,76 @@ describe('Simulation Engine', () => {
         expect(totalDuration).toBeLessThanOrEqual(60);
     });
 
+    it('Thread Constraint: Uses a single shared color pool across machine types', () => {
+        const sharedPoolStyle: GarmentStyle = {
+            ...mockStyle,
+            colorVariant: 'Red',
+            quantity: 20,
+            operations: [
+                {
+                    id: 'op-overlock',
+                    name: 'Overlock',
+                    smv: 60,
+                    machineType: 'Overlock/Serger',
+                    dependencies: [],
+                    completedQuantity: 0
+                },
+                {
+                    id: 'op-lockstitch',
+                    name: 'Lockstitch',
+                    smv: 60,
+                    machineType: 'Single Needle Lockstitch',
+                    dependencies: [],
+                    completedQuantity: 0
+                }
+            ]
+        };
+
+        const assignments: Assignment[] = [
+            { operationId: 'op-overlock', operatorIds: ['op-1'] },
+            { operationId: 'op-lockstitch', operatorIds: ['op-2'] }
+        ];
+
+        const result = simulateProductionSchedule(
+            sharedPoolStyle,
+            assignments,
+            [mockOperator, mockOperator2],
+            { 'Overlock/Serger': 3, 'Single Needle Lockstitch': 3 },
+            120,
+            0,
+            {},
+            {},
+            [],
+            {
+                machineRules: {
+                    'Overlock/Serger': {
+                        ballsPerMachine: 5,
+                        availableByColor: { Red: 5 }
+                    },
+                    'Single Needle Lockstitch': {
+                        ballsPerMachine: 1,
+                        availableByColor: { Red: 5 }
+                    }
+                }
+            }
+        );
+
+        const overlockSchedule = result.schedule['op-1'] || [];
+        const lockstitchSchedule = result.schedule['op-2'] || [];
+        expect(overlockSchedule.length).toBeGreaterThan(0);
+        expect(lockstitchSchedule.length).toBeGreaterThan(0);
+
+        const hasOverlap = overlockSchedule.some(overSeg =>
+            lockstitchSchedule.some(lockSeg =>
+                overSeg.start < lockSeg.end && lockSeg.start < overSeg.end
+            )
+        );
+
+        // With a shared pool of 5 balls, Overlock (5) and Lockstitch (1)
+        // cannot run at the same time for the same color.
+        expect(hasOverlap).toBe(false);
+    });
+
     it('Color Stickiness: keeps an operator on the same variant when feasible', () => {
         const redStyle: GarmentStyle = {
             ...mockStyle,
@@ -793,6 +863,135 @@ describe('Simulation Engine', () => {
         expect(wB).toBeGreaterThan(wA);
         // Should be roughly 0.66 vs 0.33
         expect(wB).toBeCloseTo(0.66, 1);
+    });
+
+    it('Terminal Path Balance: does not starve a terminal op for a successor-feeding op', () => {
+        // Diamond dependency mirroring the real "Slim Fit Chino" case:
+        //   Upstream -> Waistband -> Buttonhole (terminal)
+        //   Upstream -> BottomHem (terminal)
+        // One operator owns BOTH Waistband (feeds a hungry successor) and the
+        // terminal BottomHem. A fast Buttonhole keeps draining Waistband, so the
+        // old scheduler treated Waistband as permanently urgent and starved
+        // BottomHem. The two finishing paths should now stay balanced.
+        const style: GarmentStyle = {
+            id: 'diamond',
+            name: 'Diamond',
+            buyer: 'B',
+            totalSmv: 10,
+            quantity: 400,
+            status: 'active',
+            startDate: '2023-01-01',
+            operations: [
+                { id: 'upstream', name: 'Upstream', smv: 30, machineType: 'Single Needle Lockstitch', dependencies: [], completedQuantity: 0 },
+                { id: 'waist', name: 'Waistband', smv: 60, machineType: 'Overlock/Serger', dependencies: ['upstream'], completedQuantity: 0 },
+                { id: 'button', name: 'Buttonhole', smv: 6, machineType: 'Flatlock', dependencies: ['waist'], completedQuantity: 0 },
+                { id: 'hem', name: 'Bottom Hem', smv: 60, machineType: 'Overlock/Serger', dependencies: ['upstream'], completedQuantity: 0 },
+            ],
+        } as GarmentStyle;
+
+        // op-1 owns both finishing stations (Waistband + Bottom Hem).
+        const assignments: Assignment[] = [
+            { operationId: 'upstream', operatorIds: ['op-2'] },
+            { operationId: 'waist', operatorIds: ['op-1'] },
+            { operationId: 'button', operatorIds: ['op-3'] },
+            { operationId: 'hem', operatorIds: ['op-1'] },
+        ];
+
+        const op3: Operator = { ...mockOperator2, id: 'op-3', name: 'Op3', skills: ['Flatlock'] };
+        const machineCounts = {
+            'Single Needle Lockstitch': 4,
+            'Overlock/Serger': 4,
+            'Flatlock': 4,
+        };
+
+        const result = simulateProductionSchedule(
+            style,
+            assignments,
+            [mockOperator, mockOperator2, op3],
+            machineCounts,
+            240,
+            0,
+        );
+
+        const tally = (opId: string) =>
+            Object.values(result.schedule)
+                .flat()
+                .filter(s => s.opId === opId)
+                .reduce((sum, s) => sum + s.count, 0);
+
+        const waist = tally('waist');
+        const hem = tally('hem');
+
+        // Both finishing stations get worked...
+        expect(waist).toBeGreaterThan(20);
+        expect(hem).toBeGreaterThan(20);
+        // ...and the terminal Bottom Hem keeps pace with Waistband instead of
+        // being starved (same SMV -> roughly equal share of op-1's time).
+        expect(hem).toBeGreaterThanOrEqual(waist * 0.6);
+    });
+
+    it('Diamond Inventory: a shared predecessor feeds both branches, not split between them', () => {
+        // upstream -> branchA (terminal) and upstream -> branchB (terminal).
+        // upstream is the constraint; each branch has its own fast operator.
+        // Per-edge buffers mean ONE upstream piece feeds BOTH branches, so each
+        // branch should process ~all of upstream's output. The old shared-pool
+        // model split upstream between them (~half each), so the two branches
+        // could never together exceed upstream's output.
+        const style: GarmentStyle = {
+            id: 'diamond2',
+            name: 'Diamond2',
+            buyer: 'B',
+            totalSmv: 10,
+            quantity: 400,
+            status: 'active',
+            startDate: '2023-01-01',
+            operations: [
+                { id: 'upstream', name: 'Upstream', smv: 240, machineType: 'Single Needle Lockstitch', dependencies: [], completedQuantity: 0 },
+                { id: 'branchA', name: 'Branch A', smv: 30, machineType: 'Overlock/Serger', dependencies: ['upstream'], completedQuantity: 0 },
+                { id: 'branchB', name: 'Branch B', smv: 30, machineType: 'Flatlock', dependencies: ['upstream'], completedQuantity: 0 },
+            ],
+        } as GarmentStyle;
+
+        const assignments: Assignment[] = [
+            { operationId: 'upstream', operatorIds: ['op-1'] },
+            { operationId: 'branchA', operatorIds: ['op-2'] },
+            { operationId: 'branchB', operatorIds: ['op-3'] },
+        ];
+
+        const opA: Operator = { ...mockOperator2, id: 'op-2', name: 'A', skills: ['Overlock/Serger'] };
+        const opB: Operator = { ...mockOperator2, id: 'op-3', name: 'B', skills: ['Flatlock'] };
+        const machineCounts = {
+            'Single Needle Lockstitch': 4,
+            'Overlock/Serger': 4,
+            'Flatlock': 4,
+        };
+
+        const result = simulateProductionSchedule(
+            style,
+            assignments,
+            [mockOperator, opA, opB],
+            machineCounts,
+            240,
+            0,
+        );
+
+        const tally = (opId: string) =>
+            Object.values(result.schedule)
+                .flat()
+                .filter(s => s.opId === opId)
+                .reduce((sum, s) => sum + s.count, 0);
+
+        const up = tally('upstream');
+        const a = tally('branchA');
+        const b = tally('branchB');
+
+        expect(up).toBeGreaterThan(20);
+        // Both branches independently process ~all of upstream's output...
+        expect(a).toBeGreaterThanOrEqual(up * 0.7);
+        expect(b).toBeGreaterThanOrEqual(up * 0.7);
+        // ...so together they far exceed upstream — impossible if they shared one
+        // consumable pool (which would cap a + b at ~upstream).
+        expect(a + b).toBeGreaterThan(up * 1.5);
     });
 
 });

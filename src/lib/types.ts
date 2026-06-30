@@ -128,6 +128,17 @@ export interface ScheduleSegment {
     completed?: boolean;
 }
 
+/**
+ * A scheduled non-working break (tea, lunch, etc.).
+ * `start` is minutes from shift start (wall-clock); `duration` in minutes.
+ */
+export interface BreakConfig {
+    id: string;
+    name: string;
+    start: number;
+    duration: number;
+}
+
 export interface DailyPlan {
     date: FirestoreTimestamp;
     publishedBy: string;

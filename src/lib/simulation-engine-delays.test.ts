@@ -1,20 +1,19 @@
 
 import { describe, it, expect } from 'vitest';
 import { simulateProductionSchedule } from './simulation-engine';
-import { GarmentStyle, Operator } from '@/types/schema';
+import type { GarmentStyle, Operator } from '@/lib/types';
 
 describe('Simulation Engine - Operator Delays', () => {
     const style: GarmentStyle = {
         id: 'style1',
         name: 'Test Style',
-        baseStyle: 'T-Shirt',
-        variantName: 'V1',
+        buyer: 'Test Buyer',
+        totalSmv: 10 / 60,
         operations: [
-            { id: 'op1', name: 'Sewing', machineType: 'Sewing Machine', smv: 10, dependencies: [] } as any,
+            { id: 'op1', name: 'Sewing', machineType: 'Sewing Machine', smv: 10, dependencies: [], completedQuantity: 0 },
         ],
         status: 'active',
-        createdAt: new Date(),
-        updatedAt: new Date(),
+        startDate: '2026-06-30',
         quantity: 1000
     };
 
