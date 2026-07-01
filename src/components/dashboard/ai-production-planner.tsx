@@ -161,6 +161,9 @@ const NEXT_STYLE_PRIMARY_OUTPUT_DROP_PCT = 0.02;
 const NEXT_STYLE_PREP_WIP_MIN_UNITS = 20;
 const NEXT_STYLE_PREP_WIP_MAX_UNITS = 60;
 const NEXT_STYLE_PREP_WIP_OUTPUT_RATIO = 0.15;
+const AI_REBALANCE_WIP_IMPROVEMENT_UNITS = 5;
+const AI_REBALANCE_WIP_RISE_TOLERANCE_UNITS = 10;
+const AI_REBALANCE_WIP_RISE_TOLERANCE_PCT = 0.1;
 
 const OVERLOCK_MACHINE_TYPE = 'Overlock/Serger';
 const getDefaultBallsPerMachine = (machineType: string) =>
@@ -202,6 +205,14 @@ export type NextStylePlanCandidate = {
     quality: PlanQuality;
     decision: NextStyleFlowDecision;
     removedUnits: number;
+};
+export type RebalanceGuardDecision = {
+    action: 'accept' | 'keep-existing';
+    reason: string;
+    primaryOutputDelta: number;
+    nextOutputDelta: number;
+    actualOutputDelta: number;
+    wipDelta: number;
 };
 
 export const getNextStylePrepWipLimit = (primaryOutput: number): number => {
@@ -268,6 +279,84 @@ export function assessNextStyleFlow(
         primaryDropLimit,
         prepWipLimit,
         reason: 'Next style held because no feasible idle-capacity work was found.',
+    };
+}
+
+export function assessRebalanceCandidate(
+    existing: PlanQuality | null,
+    candidate: PlanQuality
+): RebalanceGuardDecision {
+    if (!existing || (existing.actualOutput <= 0 && existing.estimatedWip <= 0)) {
+        return {
+            action: 'accept',
+            reason: 'No existing balance to protect.',
+            primaryOutputDelta: candidate.primaryOutput,
+            nextOutputDelta: candidate.nextOutput,
+            actualOutputDelta: candidate.actualOutput,
+            wipDelta: candidate.estimatedWip,
+        };
+    }
+
+    const primaryOutputDelta = candidate.primaryOutput - existing.primaryOutput;
+    const nextOutputDelta = candidate.nextOutput - existing.nextOutput;
+    const actualOutputDelta = candidate.actualOutput - existing.actualOutput;
+    const wipDelta = candidate.estimatedWip - existing.estimatedWip;
+    const wipRiseTolerance = Math.max(
+        AI_REBALANCE_WIP_RISE_TOLERANCE_UNITS,
+        Math.round(existing.estimatedWip * AI_REBALANCE_WIP_RISE_TOLERANCE_PCT)
+    );
+
+    const baseDecision = {
+        primaryOutputDelta,
+        nextOutputDelta,
+        actualOutputDelta,
+        wipDelta,
+    };
+
+    if (primaryOutputDelta < 0) {
+        return {
+            action: 'keep-existing',
+            reason: `Kept existing balance because the new run reduces current-style output by ${Math.abs(primaryOutputDelta)} pcs.`,
+            ...baseDecision,
+        };
+    }
+
+    if (primaryOutputDelta > 0) {
+        if (wipDelta <= wipRiseTolerance) {
+            return {
+                action: 'accept',
+                reason: `Accepted new balance: current-style output improves by ${primaryOutputDelta} pcs.`,
+                ...baseDecision,
+            };
+        }
+
+        return {
+            action: 'keep-existing',
+            reason: `Kept existing balance because the ${primaryOutputDelta} pcs output gain creates ${wipDelta} extra WIP, above the ${wipRiseTolerance} pcs tolerance.`,
+            ...baseDecision,
+        };
+    }
+
+    if (nextOutputDelta > 0 && wipDelta <= wipRiseTolerance) {
+        return {
+            action: 'accept',
+            reason: `Accepted new balance: next-style output improves by ${nextOutputDelta} pcs without hurting current output.`,
+            ...baseDecision,
+        };
+    }
+
+    if (wipDelta <= -AI_REBALANCE_WIP_IMPROVEMENT_UNITS) {
+        return {
+            action: 'accept',
+            reason: `Accepted new balance: same output with ${Math.abs(wipDelta)} pcs less WIP.`,
+            ...baseDecision,
+        };
+    }
+
+    return {
+        action: 'keep-existing',
+        reason: `Kept existing balance because the new run does not improve current output and WIP changes by only ${wipDelta} pcs.`,
+        ...baseDecision,
     };
 }
 
@@ -1678,9 +1767,19 @@ export function AIProductionPlanner(): React.ReactNode {
         if (!selectedStyle) return;
         setIsBalancing(true);
         setAiReasoning(null);
-        setLastNextStyleDecision(null);
         try {
             const candidatesPool = operators.filter(o => availableOperatorIds.includes(o.id));
+            const previousAiReasoning = aiReasoning;
+            const previousNextStyleDecision = lastNextStyleDecision;
+            const hasExistingPlan = hasAnyScopedAssignments(assignments, variantAssignments);
+            const existingQuality = hasExistingPlan
+                ? evaluatePlanQuality(
+                    assignments,
+                    variantAssignments,
+                    nextAssignments,
+                    nextVariantAssignments
+                )
+                : null;
             const buildBalancerInput = (style: GarmentStyle, operatorPool: typeof candidatesPool = candidatesPool) => ({
                 style: {
                     id: style.id,
@@ -1722,10 +1821,9 @@ export function AIProductionPlanner(): React.ReactNode {
             const computedPrimaryVariants = buildVariantAssignmentMap(selectedStyle, computedPrimary);
             let nextBalanceDecision: NextStyleFlowDecision | null = null;
             let nextBalanceError: string | null = null;
+            let candidateNextAssignments: Assignment[] = [];
+            let candidateNextVariantAssignments: Record<string, Assignment[]> = {};
             let combinedReasoning = result.reasoning;
-
-            setAssignments(computedPrimary);
-            setVariantAssignments(computedPrimaryVariants);
 
             // Continuous Flow: auto-assign the next style to soak up idle capacity —
             // but capacity-aware, so it does NOT steal the primary's bottleneck.
@@ -1787,8 +1885,6 @@ export function AIProductionPlanner(): React.ReactNode {
                     const nextResult = await runLineBalancer(buildBalancerInput(selectedNextStyle, nextOperatorPool));
                     if ('error' in nextResult) {
                         nextBalanceError = nextResult.error;
-                        setNextAssignments([]);
-                        setNextVariantAssignments({});
                     } else {
                         const computedNext: Assignment[] = nextResult.assignments.map(a => ({
                             operationId: a.operationId,
@@ -1830,22 +1926,14 @@ export function AIProductionPlanner(): React.ReactNode {
                                 ...safeNextPlan.decision,
                                 reason: `${safeNextPlan.decision.reason}${prunedText}`,
                             };
-                            setNextAssignments(safeNextPlan.assignments);
-                            setNextVariantAssignments(safeNextVariants);
-                        } else {
-                            setNextAssignments([]);
-                            setNextVariantAssignments({});
+                            candidateNextAssignments = safeNextPlan.assignments;
+                            candidateNextVariantAssignments = safeNextVariants;
                         }
                     }
                 } catch (nextErr) {
                     console.error("Next-style balancing failed:", nextErr);
                     nextBalanceError = nextErr instanceof Error ? nextErr.message : "Next-style balancing failed.";
-                    setNextAssignments([]);
-                    setNextVariantAssignments({});
                 }
-            } else {
-                setNextAssignments([]);
-                setNextVariantAssignments({});
             }
 
             if (selectedNextStyle) {
@@ -1855,8 +1943,43 @@ export function AIProductionPlanner(): React.ReactNode {
                     combinedReasoning = `${combinedReasoning}\n\nNext style skipped: ${nextBalanceError}`;
                 }
             }
+
+            const candidateQuality = evaluatePlanQuality(
+                computedPrimary,
+                computedPrimaryVariants,
+                candidateNextAssignments,
+                candidateNextVariantAssignments
+            );
+            const rebalanceGuard = candidateQuality
+                ? assessRebalanceCandidate(existingQuality, candidateQuality)
+                : {
+                    action: 'keep-existing' as const,
+                    reason: 'Kept existing balance because the new run could not be simulated.',
+                    primaryOutputDelta: 0,
+                    nextOutputDelta: 0,
+                    actualOutputDelta: 0,
+                    wipDelta: 0,
+                };
+
+            if (rebalanceGuard.action === 'keep-existing') {
+                setLastNextStyleDecision(previousNextStyleDecision);
+                setAiReasoning(previousAiReasoning
+                    ? `${previousAiReasoning}\n\nAI rebalance guard: ${rebalanceGuard.reason}`
+                    : `AI rebalance guard: ${rebalanceGuard.reason}`
+                );
+                toast({
+                    title: 'Existing Balance Kept',
+                    description: rebalanceGuard.reason,
+                });
+                return;
+            }
+
+            setAssignments(computedPrimary);
+            setVariantAssignments(computedPrimaryVariants);
+            setNextAssignments(candidateNextAssignments);
+            setNextVariantAssignments(candidateNextVariantAssignments);
             setLastNextStyleDecision(selectedNextStyle ? nextBalanceDecision : null);
-            setAiReasoning(combinedReasoning);
+            setAiReasoning(`${combinedReasoning}\n\nAI rebalance guard: ${rebalanceGuard.reason}`);
 
             const toastTitle = !selectedNextStyle
                 ? "Line Balanced by AI"
@@ -1886,12 +2009,19 @@ export function AIProductionPlanner(): React.ReactNode {
         selectedNextStyle,
         operators,
         availableOperatorIds,
+        aiReasoning,
+        lastNextStyleDecision,
+        assignments,
+        variantAssignments,
+        nextAssignments,
+        nextVariantAssignments,
         machineCounts,
         availableMinutes,
         switchDelay,
         operatorAttendance,
         learnedPerformance,
         threadConstraintConfig,
+        hasAnyScopedAssignments,
         buildVariantAssignmentMap,
         evaluatePlanQuality,
         toast

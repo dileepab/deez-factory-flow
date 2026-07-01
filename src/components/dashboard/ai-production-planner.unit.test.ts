@@ -10,6 +10,7 @@ vi.mock('@/lib/actions', () => ({
 
 import {
     assessNextStyleFlow,
+    assessRebalanceCandidate,
     buildAssignmentsFromUnits,
     findSafeNextStylePlan,
     flattenAssignmentUnits,
@@ -135,5 +136,44 @@ describe('ai-production-planner next-style flow guard', () => {
         expect(plan?.assignments).toEqual([
             { operationId: 'pocket', operatorIds: ['ruvini'] },
         ]);
+    });
+
+    it('keeps the existing plan when a rerun only changes WIP slightly', () => {
+        const decision = assessRebalanceCandidate(
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 78 }),
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 76 })
+        );
+
+        expect(decision.action).toBe('keep-existing');
+    });
+
+    it('accepts a rerun when output improves without excessive WIP growth', () => {
+        const decision = assessRebalanceCandidate(
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 78 }),
+            quality({ actualOutput: 201, primaryOutput: 201, estimatedWip: 84 })
+        );
+
+        expect(decision.action).toBe('accept');
+        expect(decision.primaryOutputDelta).toBe(1);
+    });
+
+    it('keeps the existing plan when current-style output drops', () => {
+        const decision = assessRebalanceCandidate(
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 78 }),
+            quality({ actualOutput: 199, primaryOutput: 199, estimatedWip: 60 })
+        );
+
+        expect(decision.action).toBe('keep-existing');
+        expect(decision.reason).toContain('reduces current-style output');
+    });
+
+    it('accepts a same-output rerun only when WIP meaningfully improves', () => {
+        const decision = assessRebalanceCandidate(
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 78 }),
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 70 })
+        );
+
+        expect(decision.action).toBe('accept');
+        expect(decision.wipDelta).toBe(-8);
     });
 });
