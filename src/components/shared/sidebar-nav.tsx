@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { auth } from "@/firebase/client";
-import { Home, Users, Package, BarChart2, Factory, User, LogOut } from "lucide-react";
+import { Home, Users, Package, BarChart2, Factory, User, LogOut, Sparkles } from "lucide-react";
 import {
   SidebarContent,
   SidebarFooter,
@@ -20,6 +20,7 @@ const links = [
   { href: "/dashboard/operators", label: "Operators", icon: Users },
   { href: "/dashboard/styles", label: "Styles", icon: Package },
   { href: "/dashboard/production", label: "Production", icon: BarChart2 },
+  { href: "/dashboard/ai-production", label: "AI Production", icon: Sparkles },
 ];
 
 export function SidebarNav() {

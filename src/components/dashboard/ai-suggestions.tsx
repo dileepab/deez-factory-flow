@@ -4,12 +4,17 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Loader2, Lightbulb, AlertTriangle } from 'lucide-react';
-import { getEfficiencyImprovementSuggestions, EfficiencyImprovementSuggestionsOutput } from '@/ai/flows/efficiency-improvement-suggestions';
+import { getSuggestions } from '@/lib/actions';
 import { useCollection } from '@/firebase/firestore/use-collection';
 import { firestore } from '@/firebase/client';
 import { collection, query, where, Timestamp } from 'firebase/firestore';
 import { ProductionEntry } from '@/lib/types';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
+
+type EfficiencyImprovementSuggestionsOutput = {
+  suggestions: string[];
+  reasoning: string;
+};
 
 export function AISuggestions() {
   const [suggestions, setSuggestions] = useState<EfficiencyImprovementSuggestionsOutput | null>(null);
@@ -46,10 +51,15 @@ export function AISuggestions() {
 
     try {
       const realTimeData = JSON.stringify(productionEntries);
-      const result = await getEfficiencyImprovementSuggestions({ realTimeData, language: 'Sinhala' });
+      const result = await getSuggestions(realTimeData, 'Sinhala');
+      if ('error' in result) {
+        setSuggestions(null);
+        setError(result.error);
+        return;
+      }
+
       setSuggestions(result);
     } catch (e) {
-      console.error(e);
       setError('AI වෙතින් යෝජනා ලබා ගැනීමට නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න.');
     } finally {
       setIsLoading(false);

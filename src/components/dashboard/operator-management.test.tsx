@@ -34,6 +34,10 @@ vi.mock('@/firebase/firestore/use-collection', () => ({
     useCollection: (ref: any) => mockUseCollection(ref)
 }));
 
+vi.mock('@/firebase/client', () => ({
+    firestore: {}
+}));
+
 // Mock Firebase SDK
 const mockAddDoc = vi.fn();
 const mockUpdateDoc = vi.fn();

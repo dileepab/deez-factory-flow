@@ -6,7 +6,6 @@ import {
   signInWithEmailAndPassword,
   // Assume getAuth and app are initialized elsewhere
 } from 'firebase/auth';
-import { Emitter, createEmitter } from './error-emitter';
 
 /** Initiate anonymous sign-in (non-blocking). */
 export function initiateAnonymousSignIn(authInstance: Auth): void {

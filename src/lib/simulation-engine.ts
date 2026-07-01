@@ -39,9 +39,11 @@ const getHistoricalMultiplier = (
 
 const deriveWipCapForOperation = (opSmvSeconds: number): number => {
     const smvMinutes = Math.max(0.25, opSmvSeconds / 60);
-    // Cap WIP to roughly 30-45 minutes worth of work to reduce upstream overproduction.
-    const suggested = Math.round(35 / smvMinutes);
-    return clamp(suggested, 8, 60);
+    // Cap WIP to roughly 45 minutes of work. A slightly larger buffer keeps an
+    // operator on the same station for longer contiguous runs (fewer, chunkier
+    // blocks on the floor) without letting upstream overproduce excessively.
+    const suggested = Math.round(45 / smvMinutes);
+    return clamp(suggested, 10, 75);
 };
 
 // Helper: Simulate Minute-by-Minute Production for Timeline
@@ -171,6 +173,26 @@ export const simulateProductionSchedule = (
 
         return Object.keys(rules).length > 0 ? rules : undefined;
     })();
+    const sharedThreadInventoryByColor = (() => {
+        const inventory: Record<string, number> = {};
+        if (!normalizedThreadConstraints) return inventory;
+
+        Object.values(normalizedThreadConstraints).forEach(rule => {
+            Object.entries(rule.availableByColor || {}).forEach(([color, rawBalls]) => {
+                if (typeof rawBalls !== 'number' || !isFinite(rawBalls)) return;
+                const balls = Math.max(0, Math.floor(rawBalls));
+                if (inventory[color] === undefined) {
+                    inventory[color] = balls;
+                    return;
+                }
+
+                // If machine rules disagree, stay conservative and use the lowest limit.
+                inventory[color] = Math.min(inventory[color], balls);
+            });
+        });
+
+        return inventory;
+    })();
 
     // 1. Setup Logging & Output
     const logs: string[] = [];
@@ -188,8 +210,7 @@ export const simulateProductionSchedule = (
     const operatorLastMachine = new Map<string, string>();
     const operatorLastOpId = new Map<string, string>();
     const operatorLastColor = new Map<string, string>();
-    const threadMachineUsageByMachineColor = new Map<string, number>();
-    const getThreadUsageKey = (machineType: string, color: string) => `${machineType}::${color}`;
+    const threadBallsInUseByColor = new Map<string, number>();
 
     const schedule: Record<string, { start: number, end: number, opId: string, count: number, isNextStyle?: boolean, colorVariant?: string, styleIndex: number }[]> = {};
     operators.forEach(o => schedule[o.id] = []);
@@ -245,25 +266,25 @@ export const simulateProductionSchedule = (
             }
         });
 
-        // 1.5 Pre-calculate Successors
+        // 1.5 Pre-calculate effective consumers (who actually pulls each op's
+        // output, after transitive reduction). Keyed off effectiveDependencies so
+        // the WIP model matches the real flow restrictions.
         const successors = new Map<string, string[]>();
         style.operations.forEach(op => {
-            if (op.dependencies) {
-                op.dependencies.forEach(depId => {
-                    const list = successors.get(depId) || [];
-                    list.push(op.id);
-                    successors.set(depId, list);
-                });
-            }
+            const deps = effectiveDependencies.get(op.id) || [];
+            deps.forEach(depId => {
+                const list = successors.get(depId) || [];
+                list.push(op.id);
+                successors.set(depId, list);
+            });
         });
         const finalOperationIds = new Set(
             style.operations
-                .filter(op => !successors.has(op.id) || (successors.get(op.id)?.length || 0) === 0)
+                .filter(op => (successors.get(op.id)?.length || 0) === 0)
                 .map(op => op.id)
         );
 
         // 2. Initialize State
-        const inventory = new Map<string, number>();
         const remainingTargets = new Map<string, number>();
         const wipCaps = new Map<string, number>();
         const totalOrderQty = style.quantity || 10000;
@@ -275,37 +296,59 @@ export const simulateProductionSchedule = (
             wipCaps.set(op.id, deriveWipCapForOperation(op.smv));
         });
 
-        // Initial Inventory
+        // Per-edge WIP buffers: edgeInventory[producer][consumer] = pieces that
+        // finished `producer` and are waiting on `consumer`. Producing one piece
+        // feeds EVERY consumer edge, so a diamond split (e.g. Outseam -> Waistband
+        // AND Bottom Hem) is no longer double-consumed from a shared pool.
+        const edgeInventory = new Map<string, Map<string, number>>();
+        const getEdge = (producer: string, consumer: string) =>
+            edgeInventory.get(producer)?.get(consumer) || 0;
+        const setEdge = (producer: string, consumer: string, value: number) => {
+            let inner = edgeInventory.get(producer);
+            if (!inner) { inner = new Map(); edgeInventory.set(producer, inner); }
+            inner.set(consumer, Math.max(0, value));
+        };
+
+        // Seed buffers from any already-completed work.
         style.operations.forEach(op => {
-            let myOutputBuffer = op.completedQuantity || 0;
-            const consumers = style.operations.filter(c => {
-                const deps = effectiveDependencies.get(c.id) || [];
-                return deps.includes(op.id);
+            const produced = op.completedQuantity || 0;
+            (successors.get(op.id) || []).forEach(consumerId => {
+                const consumer = style.operations.find(o => o.id === consumerId);
+                setEdge(op.id, consumerId, produced - (consumer?.completedQuantity || 0));
             });
-            consumers.forEach(c => {
-                myOutputBuffer -= (c.completedQuantity || 0);
-            });
-            inventory.set(op.id, Math.max(0, myOutputBuffer));
         });
+
+        // WIP sitting after a station = its most-backed-up consumer edge (0 if final).
+        const ownWip = (opId: string) => {
+            const consumers = successors.get(opId) || [];
+            let max = 0;
+            for (const c of consumers) max = Math.max(max, getEdge(opId, c));
+            return max;
+        };
+        // Pieces available to work = the scarcest input edge. Infinity when the op
+        // has no dependencies (fed directly from cutting/store).
+        const inputAvailable = (opId: string) => {
+            const deps = effectiveDependencies.get(opId) || [];
+            if (deps.length === 0) return Infinity;
+            let min = Infinity;
+            for (const d of deps) min = Math.min(min, getEdge(d, opId));
+            return min;
+        };
+        // Move finished pieces onto every consumer edge.
+        const addProduction = (opId: string, count: number) => {
+            (successors.get(opId) || []).forEach(c => setEdge(opId, c, getEdge(opId, c) + count));
+        };
+        // Pull pieces from each input edge as a batch starts.
+        const consumeInput = (opId: string, count: number) => {
+            (effectiveDependencies.get(opId) || []).forEach(d => setEdge(d, opId, getEdge(d, opId) - count));
+        };
 
         const userProcessedCounts = new Map<string, Map<string, number>>();
         operators.forEach(u => userProcessedCounts.set(u.id, new Map()));
-        const threadMachineCaps = (() => {
+        const threadColorLimitBalls = (() => {
             const styleColor = style.colorVariant;
-            const caps = new Map<string, number>();
-            if (!normalizedThreadConstraints || !styleColor) return caps;
-            Object.entries(normalizedThreadConstraints).forEach(([machineType, rule]) => {
-                const balls = rule.availableByColor?.[styleColor];
-                if (typeof balls !== 'number' || !isFinite(balls)) {
-                    caps.set(machineType, 0);
-                    return;
-                }
-                caps.set(
-                    machineType,
-                    Math.max(0, Math.floor(Math.max(0, balls) / rule.ballsPerMachine))
-                );
-            });
-            return caps;
+            if (!normalizedThreadConstraints || !styleColor) return 0;
+            return Math.max(0, Math.floor(sharedThreadInventoryByColor[styleColor] ?? 0));
         })();
 
         return {
@@ -313,10 +356,13 @@ export const simulateProductionSchedule = (
             targetRatios,
             successors,
             finalOperationIds,
-            inventory,
+            ownWip,
+            inputAvailable,
+            addProduction,
+            consumeInput,
             remainingTargets,
             wipCaps,
-            threadMachineCaps,
+            threadColorLimitBalls,
             userProcessedCounts,
             assignments
         };
@@ -367,13 +413,15 @@ export const simulateProductionSchedule = (
                     state.colorVariant &&
                     normalizedThreadConstraints[mType]
                 ) {
-                    const key = getThreadUsageKey(mType, state.colorVariant);
-                    const currentThreadUse = threadMachineUsageByMachineColor.get(key) || 1;
-                    threadMachineUsageByMachineColor.set(key, Math.max(0, currentThreadUse - 1));
+                    const rule = normalizedThreadConstraints[mType];
+                    const currentThreadUse = threadBallsInUseByColor.get(state.colorVariant) || rule.ballsPerMachine;
+                    threadBallsInUseByColor.set(
+                        state.colorVariant,
+                        Math.max(0, currentThreadUse - rule.ballsPerMachine)
+                    );
                 }
 
-                const currentInv = meta.inventory.get(op.id) || 0;
-                meta.inventory.set(op.id, currentInv + state.count);
+                meta.addProduction(op.id, state.count);
 
                 const uMap = meta.userProcessedCounts.get(uid);
                 if (uMap) uMap.set(op.id, (uMap.get(op.id) || 0) + state.count);
@@ -424,12 +472,12 @@ export const simulateProductionSchedule = (
 
                         const succs = meta.successors.get(op.id) || [];
                         const isFinal = succs.length === 0;
-                        const ownInventory = meta.inventory.get(op.id) || 0;
+                        const ownInventory = meta.ownWip(op.id);
                         const opWipCap = meta.wipCaps.get(op.id) || 15;
                         const downstreamBlocked = succs.some(sId => {
                             if (meta.finalOperationIds.has(sId)) return false;
                             const succCap = meta.wipCaps.get(sId) || 15;
-                            return (meta.inventory.get(sId) || 0) >= succCap;
+                            return meta.ownWip(sId) >= succCap;
                         });
                         if (downstreamBlocked) continue;
                         if (!isFinal && ownInventory >= opWipCap) continue;
@@ -445,25 +493,22 @@ export const simulateProductionSchedule = (
                             currentColor &&
                             normalizedThreadConstraints[mType]
                         ) {
-                            const threadCap = meta.threadMachineCaps.get(mType) ?? Number.POSITIVE_INFINITY;
-                            const threadUsed = threadMachineUsageByMachineColor.get(
-                                getThreadUsageKey(mType, currentColor)
-                            ) || 0;
-                            if (threadUsed >= threadCap) continue;
+                            const threadRule = normalizedThreadConstraints[mType];
+                            const threadLimitBalls = meta.threadColorLimitBalls;
+                            const threadUsedBalls = threadBallsInUseByColor.get(currentColor) || 0;
+                            const threadNeededBalls = threadRule.ballsPerMachine;
+                            if (threadUsedBalls + threadNeededBalls > threadLimitBalls) continue;
                         }
 
-                        let maxInput = Infinity;
                         const deps = meta.effectiveDependencies.get(op.id) || [];
-                        if (deps.length > 0) {
-                            const inputs = deps.map(d => meta.inventory.get(d) || 0);
-                            maxInput = Math.min(...inputs);
-                        }
+                        let maxInput = meta.inputAvailable(op.id);
                         const leftToMake = meta.remainingTargets.get(op.id) || 0;
                         if (leftToMake <= 0) continue;
                         if (maxInput > leftToMake) maxInput = leftToMake;
                         if (maxInput <= 0 && deps.length > 0) continue;
 
-                        const MIN_BATCH = 5;
+                        const isWarmup = availableMinutes >= 240 && t < 45;
+                        const MIN_BATCH = isWarmup ? 1 : 5;
                         const isEndOfShift = (endCheck - t) < 60;
                         const upstreamFinished = deps.every(dId => (meta.remainingTargets.get(dId) || 0) <= 0);
                         if (maxInput < MIN_BATCH && !isEndOfShift && !upstreamFinished && deps.length) continue;
@@ -474,8 +519,9 @@ export const simulateProductionSchedule = (
                         const boundedEfficiency = clamp(efficiency, 0.45, 1.8);
                         const smvMinutes = op.smv / 60;
                         const minutesPerPc = smvMinutes / boundedEfficiency;
-                        const rawTargetBatch = Math.floor(20 / minutesPerPc);
-                        const targetPcs = Math.max(10, Math.min(100, rawTargetBatch));
+                        const targetBatchTime = isWarmup ? 3 : 20;
+                        const rawTargetBatch = Math.floor(targetBatchTime / minutesPerPc);
+                        const targetPcs = Math.max(isWarmup ? 2 : 10, Math.min(100, rawTargetBatch));
                         const actualPcs = Math.min(maxInput, targetPcs);
                         if (actualPcs <= 0) continue;
 
@@ -508,30 +554,61 @@ export const simulateProductionSchedule = (
                     .map(a => style.operations.find(o => o.id === a.operationId))
                     .filter(Boolean) as typeof style.operations;
 
+                // Coarse feasibility penalty: ops that are blocked downstream or
+                // already overbuilt sort last (they are also hard-skipped below).
+                const getPenalty = (op: typeof style.operations[0]) => {
+                    const currentInv = meta.ownWip(op.id);
+                    const succs = meta.successors.get(op.id) || [];
+                    const isFinal = !meta.successors.has(op.id) || meta.successors.get(op.id)!.length === 0;
+                    const opWipCap = meta.wipCaps.get(op.id) || 15;
+
+                    const successorBlocked = succs.some(sId => {
+                        if (meta.finalOperationIds.has(sId)) return false;
+                        const succCap = meta.wipCaps.get(sId) || 15;
+                        return meta.ownWip(sId) >= succCap;
+                    });
+
+                    if (successorBlocked) return 2;
+                    if (!isFinal && currentInv >= opWipCap) return 1;
+                    return 0;
+                };
+
+                // Work-share balancing: keep each of an operator's assigned stations
+                // progressing toward its solved time-share. This stops a station that
+                // feeds a hungry successor (e.g. Waistband -> Buttonhole) from
+                // monopolising the operator and starving a terminal station (e.g.
+                // Bottom Hem), which previously capped completions.
+                const userRatios = meta.targetRatios.get(user.id);
+                const userDone = meta.userProcessedCounts.get(user.id);
+                const fallbackWeight = candidates.length > 0 ? 1 / candidates.length : 1;
+                const doneMinutesFor = (op: typeof style.operations[0]) =>
+                    (userDone?.get(op.id) || 0) * (op.smv / 60);
+                const totalDoneMinutes = candidates.reduce((sum, op) => sum + doneMinutesFor(op), 0);
+                const weightFor = (op: typeof style.operations[0]) => {
+                    const w = userRatios?.get(op.id);
+                    return (typeof w === 'number' && w > 0) ? w : fallbackWeight;
+                };
+                // Stickiness bonus (in minutes): only switch off the current station
+                // when another is behind by more than the changeover is worth, which
+                // keeps the day to a few stable blocks instead of constant thrash.
+                const lastOpId = operatorLastOpId.get(user.id);
+                const stickBonus = Math.max(10, switchDelay * 2);
+                const effectiveDeficit = (op: typeof style.operations[0]) => {
+                    const expected = weightFor(op) * totalDoneMinutes;
+                    const deficit = expected - doneMinutesFor(op);
+                    return deficit + (op.id === lastOpId ? stickBonus : 0);
+                };
+
                 candidates.sort((a, b) => {
-                    const getInventoryScore = (op: typeof style.operations[0]) => {
-                        const currentInv = meta.inventory.get(op.id) || 0;
-                        const succs = meta.successors.get(op.id) || [];
-                        const isFinal = !meta.successors.has(op.id) || meta.successors.get(op.id)!.length === 0;
-                        const opWipCap = meta.wipCaps.get(op.id) || 15;
+                    const penA = getPenalty(a);
+                    const penB = getPenalty(b);
+                    if (penA !== penB) return penA - penB;
 
-                        const successorBlocked = succs.some(sId => {
-                            if (meta.finalOperationIds.has(sId)) return false;
-                            const succCap = meta.wipCaps.get(sId) || 15;
-                            return (meta.inventory.get(sId) || 0) >= succCap;
-                        });
+                    // Larger deficit = further behind its fair share = work it first.
+                    const defA = effectiveDeficit(a);
+                    const defB = effectiveDeficit(b);
+                    if (defA !== defB) return defB - defA;
 
-                        if (successorBlocked) return 4;
-                        if (!isFinal && currentInv >= opWipCap) return 3;
-                        if (!isFinal && currentInv < Math.max(4, Math.floor(opWipCap * 0.4))) return 0;
-                        return 1;
-                    };
-
-                    const aInv = getInventoryScore(a);
-                    const bInv = getInventoryScore(b);
-                    if (aInv !== bInv) return aInv - bInv;
-
-                    // Simple score
                     return style.operations.indexOf(a) - style.operations.indexOf(b);
                 });
 
@@ -539,12 +616,12 @@ export const simulateProductionSchedule = (
                 for (const op of candidates) {
                     const succs = meta.successors.get(op.id) || [];
                     const isFinal = succs.length === 0;
-                    const ownInventory = meta.inventory.get(op.id) || 0;
+                    const ownInventory = meta.ownWip(op.id);
                     const opWipCap = meta.wipCaps.get(op.id) || 15;
                     const downstreamBlocked = succs.some(sId => {
                         if (meta.finalOperationIds.has(sId)) return false;
                         const succCap = meta.wipCaps.get(sId) || 15;
-                        return (meta.inventory.get(sId) || 0) >= succCap;
+                        return meta.ownWip(sId) >= succCap;
                     });
 
                     // Pull-based flow control:
@@ -572,25 +649,22 @@ export const simulateProductionSchedule = (
                         currentColor &&
                         normalizedThreadConstraints[mType]
                     ) {
-                        const threadCap = meta.threadMachineCaps.get(mType) ?? Number.POSITIVE_INFINITY;
-                        const threadUsed = threadMachineUsageByMachineColor.get(
-                            getThreadUsageKey(mType, currentColor)
-                        ) || 0;
-                        if (threadUsed >= threadCap) continue;
+                        const threadRule = normalizedThreadConstraints[mType];
+                        const threadLimitBalls = meta.threadColorLimitBalls;
+                        const threadUsedBalls = threadBallsInUseByColor.get(currentColor) || 0;
+                        const threadNeededBalls = threadRule.ballsPerMachine;
+                        if (threadUsedBalls + threadNeededBalls > threadLimitBalls) continue;
                     }
 
-                    let maxInput = Infinity;
                     const deps = meta.effectiveDependencies.get(op.id) || [];
-                    if (deps.length > 0) {
-                        const inputs = deps.map(d => meta.inventory.get(d) || 0);
-                        maxInput = Math.min(...inputs);
-                    }
+                    let maxInput = meta.inputAvailable(op.id);
                     const leftToMake = meta.remainingTargets.get(op.id) || 0;
                     if (leftToMake <= 0) continue;
                     if (maxInput > leftToMake) maxInput = leftToMake;
                     if (maxInput <= 0 && deps.length > 0) continue;
 
-                    const MIN_BATCH = 5;
+                    const isWarmup = availableMinutes >= 240 && t < 45;
+                    const MIN_BATCH = isWarmup ? 1 : 5;
                     const isEndOfShift = (endCheck - t) < 60;
 
                     // Check if upstream operations are finished producing
@@ -604,13 +678,10 @@ export const simulateProductionSchedule = (
                     const boundedEfficiency = clamp(efficiency, 0.45, 1.8);
                     const smvMinutes = op.smv / 60; // Treated as minutes directly
                     const minutesPerPc = smvMinutes / boundedEfficiency;
-                    const rawTarget = Math.floor(60 / minutesPerPc); // Target per Hour (was 20? 20 mins? No, usually hourly target)
-                    // Wait, rawTarget logic was '20 / minutesPerPc'. 
-                    // If 20 means "20 minutes batch", then okay.
-                    // But standard is Minutes.
-                    // Let's keep original logic for target, just fix SMV unit.
-                    const rawTargetBatch = Math.floor(20 / minutesPerPc); // Batch for 20 mins?
-                    const targetPcs = Math.max(10, Math.min(100, rawTargetBatch));
+
+                    const targetBatchTime = isWarmup ? 3 : 20;
+                    const rawTargetBatch = Math.floor(targetBatchTime / minutesPerPc);
+                    const targetPcs = Math.max(isWarmup ? 2 : 10, Math.min(100, rawTargetBatch));
                     const actualPcs = Math.min(maxInput, targetPcs);
                     if (actualPcs <= 0) continue;
 
@@ -657,10 +728,10 @@ export const simulateProductionSchedule = (
                         currentColor &&
                         normalizedThreadConstraints[mType]
                     ) {
-                        const key = getThreadUsageKey(mType, currentColor);
-                        threadMachineUsageByMachineColor.set(
-                            key,
-                            (threadMachineUsageByMachineColor.get(key) || 0) + 1
+                        const threadRule = normalizedThreadConstraints[mType];
+                        threadBallsInUseByColor.set(
+                            currentColor,
+                            (threadBallsInUseByColor.get(currentColor) || 0) + threadRule.ballsPerMachine
                         );
                     }
                     operatorLastMachine.set(user.id, mType);
@@ -670,12 +741,7 @@ export const simulateProductionSchedule = (
                     // Doing it on-assign is safer for "current state".
                     if (currentColor) operatorLastColor.set(user.id, currentColor);
 
-                    if (deps.length > 0) {
-                        deps.forEach(d => {
-                            const cur = meta.inventory.get(d) || 0;
-                            meta.inventory.set(d, cur - reservedPcs);
-                        });
-                    }
+                    meta.consumeInput(op.id, reservedPcs);
 
                     assigned = true;
                     userAssigned = true;

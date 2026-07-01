@@ -30,7 +30,8 @@ import { useCollection } from '@/firebase/firestore/use-collection';
 import { useConfiguration } from '@/firebase/firestore/use-configuration';
 import { collection, query, where } from 'firebase/firestore';
 import { firestore } from '@/firebase/client';
-import type { GarmentStyle, Operator, AnyUser, Assignment, ProductionEntry } from '@/lib/types';
+import type { GarmentStyle, Operator, AnyUser, Assignment, ProductionEntry, BreakConfig } from '@/lib/types';
+import { cloneDefaultBreaks } from '@/lib/shift-schedule';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { useMachineTypes } from '@/hooks/use-machine-types';
 import { Loader2, UserPlus, X, CheckCircle2, AlertCircle, Wand2, ClipboardList, RefreshCcw, ChevronDown, ChevronUp } from 'lucide-react';
@@ -39,6 +40,7 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { MultiSelect, Option } from '@/components/ui/multi-select';
 import { DailyTimeline } from './daily-timeline';
+import { OperatorJobCards } from './operator-job-cards';
 import {
     simulateProductionSchedule,
     solveFluidCapacity,
@@ -51,7 +53,8 @@ import { useToast } from "@/hooks/use-toast";
 import { doc, setDoc, Timestamp } from "firebase/firestore";
 import type { DailyPlan, ScheduleSegment } from "@/lib/types";
 import { format, startOfDay, subDays } from "date-fns";
-import { Save, CalendarClock } from "lucide-react";
+import { Save, CalendarClock, Brain, Sparkles, Coffee, Clock, Printer, Plus, Trash2 } from "lucide-react";
+import { runLineBalancer } from '@/lib/actions';
 
 // Helper function to calculate output from simulation event
 // Exported for testing
@@ -153,6 +156,14 @@ const AUTO_ASSIGN_GUARD_OUTPUT_DROP_PCT = 0.03;
 const AUTO_ASSIGN_GUARD_WIP_RISE_PCT = 0.1;
 const AUTO_ASSIGN_GUARD_OUTPUT_DROP_UNITS = 3;
 const AUTO_ASSIGN_GUARD_WIP_RISE_UNITS = 10;
+const NEXT_STYLE_PRIMARY_OUTPUT_DROP_MIN_UNITS = 3;
+const NEXT_STYLE_PRIMARY_OUTPUT_DROP_PCT = 0.02;
+const NEXT_STYLE_PREP_WIP_MIN_UNITS = 20;
+const NEXT_STYLE_PREP_WIP_MAX_UNITS = 60;
+const NEXT_STYLE_PREP_WIP_OUTPUT_RATIO = 0.15;
+const AI_REBALANCE_WIP_IMPROVEMENT_UNITS = 5;
+const AI_REBALANCE_WIP_RISE_TOLERANCE_UNITS = 10;
+const AI_REBALANCE_WIP_RISE_TOLERANCE_PCT = 0.1;
 
 const OVERLOCK_MACHINE_TYPE = 'Overlock/Serger';
 const getDefaultBallsPerMachine = (machineType: string) =>
@@ -170,6 +181,184 @@ type SimulationStyleSlot = {
     variantId?: string;
     variantColor?: string;
 };
+export type PlanQuality = {
+    actualOutput: number;
+    primaryOutput: number;
+    nextOutput: number;
+    estimatedWip: number;
+    primaryWip: number;
+    nextWip: number;
+};
+export type NextStyleFlowDecision = {
+    kind: 'continuous' | 'prep' | 'blocked';
+    primaryDrop: number;
+    primaryDropLimit: number;
+    prepWipLimit: number;
+    reason: string;
+};
+export type AssignmentUnit = {
+    operationId: string;
+    operatorId: string;
+};
+export type NextStylePlanCandidate = {
+    assignments: Assignment[];
+    quality: PlanQuality;
+    decision: NextStyleFlowDecision;
+    removedUnits: number;
+};
+export type RebalanceGuardDecision = {
+    action: 'accept' | 'keep-existing';
+    reason: string;
+    primaryOutputDelta: number;
+    nextOutputDelta: number;
+    actualOutputDelta: number;
+    wipDelta: number;
+};
+
+export const getNextStylePrepWipLimit = (primaryOutput: number): number => {
+    const scaledLimit = Math.round(Math.max(0, primaryOutput) * NEXT_STYLE_PREP_WIP_OUTPUT_RATIO);
+    return clamp(scaledLimit, NEXT_STYLE_PREP_WIP_MIN_UNITS, NEXT_STYLE_PREP_WIP_MAX_UNITS);
+};
+
+export const getNextStylePrimaryDropLimit = (primaryOutput: number): number => {
+    const scaledLimit = Math.floor(Math.max(0, primaryOutput) * NEXT_STYLE_PRIMARY_OUTPUT_DROP_PCT);
+    return Math.max(NEXT_STYLE_PRIMARY_OUTPUT_DROP_MIN_UNITS, scaledLimit);
+};
+
+export function assessNextStyleFlow(
+    primaryOnly: PlanQuality,
+    candidate: PlanQuality
+): NextStyleFlowDecision {
+    const primaryDrop = Math.max(0, primaryOnly.primaryOutput - candidate.primaryOutput);
+    const primaryDropLimit = getNextStylePrimaryDropLimit(primaryOnly.primaryOutput);
+    const prepWipLimit = getNextStylePrepWipLimit(primaryOnly.primaryOutput);
+
+    if (primaryDrop > primaryDropLimit) {
+        return {
+            kind: 'blocked',
+            primaryDrop,
+            primaryDropLimit,
+            prepWipLimit,
+            reason: `Next style held because it reduces current style output by ${primaryDrop} pcs, above the ${primaryDropLimit} pcs tolerance.`,
+        };
+    }
+
+    if (candidate.nextOutput > 0) {
+        return {
+            kind: 'continuous',
+            primaryDrop,
+            primaryDropLimit,
+            prepWipLimit,
+            reason: `Next style accepted with ${candidate.nextOutput} finished pcs and no material current-style loss.`,
+        };
+    }
+
+    if (candidate.nextWip > 0 && candidate.nextWip <= prepWipLimit) {
+        return {
+            kind: 'prep',
+            primaryDrop,
+            primaryDropLimit,
+            prepWipLimit,
+            reason: `Next style accepted as controlled prep WIP (${candidate.nextWip}/${prepWipLimit} pcs).`,
+        };
+    }
+
+    if (candidate.nextWip > prepWipLimit) {
+        return {
+            kind: 'blocked',
+            primaryDrop,
+            primaryDropLimit,
+            prepWipLimit,
+            reason: `Next style held because it creates ${candidate.nextWip} pcs WIP without finished output; prep cap is ${prepWipLimit} pcs.`,
+        };
+    }
+
+    return {
+        kind: 'blocked',
+        primaryDrop,
+        primaryDropLimit,
+        prepWipLimit,
+        reason: 'Next style held because no feasible idle-capacity work was found.',
+    };
+}
+
+export function assessRebalanceCandidate(
+    existing: PlanQuality | null,
+    candidate: PlanQuality
+): RebalanceGuardDecision {
+    if (!existing || (existing.actualOutput <= 0 && existing.estimatedWip <= 0)) {
+        return {
+            action: 'accept',
+            reason: 'No existing balance to protect.',
+            primaryOutputDelta: candidate.primaryOutput,
+            nextOutputDelta: candidate.nextOutput,
+            actualOutputDelta: candidate.actualOutput,
+            wipDelta: candidate.estimatedWip,
+        };
+    }
+
+    const primaryOutputDelta = candidate.primaryOutput - existing.primaryOutput;
+    const nextOutputDelta = candidate.nextOutput - existing.nextOutput;
+    const actualOutputDelta = candidate.actualOutput - existing.actualOutput;
+    const wipDelta = candidate.estimatedWip - existing.estimatedWip;
+    const wipRiseTolerance = Math.max(
+        AI_REBALANCE_WIP_RISE_TOLERANCE_UNITS,
+        Math.round(existing.estimatedWip * AI_REBALANCE_WIP_RISE_TOLERANCE_PCT)
+    );
+
+    const baseDecision = {
+        primaryOutputDelta,
+        nextOutputDelta,
+        actualOutputDelta,
+        wipDelta,
+    };
+
+    if (primaryOutputDelta < 0) {
+        return {
+            action: 'keep-existing',
+            reason: `Kept existing balance because the new run reduces current-style output by ${Math.abs(primaryOutputDelta)} pcs.`,
+            ...baseDecision,
+        };
+    }
+
+    if (primaryOutputDelta > 0) {
+        if (wipDelta <= wipRiseTolerance) {
+            return {
+                action: 'accept',
+                reason: `Accepted new balance: current-style output improves by ${primaryOutputDelta} pcs.`,
+                ...baseDecision,
+            };
+        }
+
+        return {
+            action: 'keep-existing',
+            reason: `Kept existing balance because the ${primaryOutputDelta} pcs output gain creates ${wipDelta} extra WIP, above the ${wipRiseTolerance} pcs tolerance.`,
+            ...baseDecision,
+        };
+    }
+
+    if (nextOutputDelta > 0 && wipDelta <= wipRiseTolerance) {
+        return {
+            action: 'accept',
+            reason: `Accepted new balance: next-style output improves by ${nextOutputDelta} pcs without hurting current output.`,
+            ...baseDecision,
+        };
+    }
+
+    if (wipDelta <= -AI_REBALANCE_WIP_IMPROVEMENT_UNITS) {
+        return {
+            action: 'accept',
+            reason: `Accepted new balance: same output with ${Math.abs(wipDelta)} pcs less WIP.`,
+            ...baseDecision,
+        };
+    }
+
+    return {
+        action: 'keep-existing',
+        reason: `Kept existing balance because the new run does not improve current output and WIP changes by only ${wipDelta} pcs.`,
+        ...baseDecision,
+    };
+}
 
 const cloneAssignments = (items: Assignment[]): Assignment[] =>
     items.map(item => ({
@@ -265,8 +454,143 @@ const buildStyleVariantOpKey = (
     operationId: string
 ) => `${source}::${rootStyleId}::${variantId || '__base'}::${operationId}`;
 
+const buildRootStyleOpKey = (rootStyleId: string, operationId: string) =>
+    `${rootStyleId}::${operationId}`;
 
-export function ProductionPlanner(): React.ReactNode {
+const estimateStyleWip = (
+    style: GarmentStyle | undefined,
+    getCount: (styleId: string, operationId: string) => number
+) => {
+    if (!style) return 0;
+    let total = 0;
+    style.operations.forEach(op => {
+        const outputCount = getCount(style.id, op.id);
+        const successors = style.operations.filter(next => next.dependencies?.includes(op.id));
+        if (successors.length === 0) return;
+        const downstream = Math.min(...successors.map(next => getCount(style.id, next.id)));
+        total += Math.max(0, outputCount - downstream);
+    });
+    return total;
+};
+
+export const flattenAssignmentUnits = (items: Assignment[]): AssignmentUnit[] =>
+    items.flatMap(item =>
+        unique(item.operatorIds)
+            .filter(Boolean)
+            .map(operatorId => ({
+                operationId: item.operationId,
+                operatorId,
+            }))
+    );
+
+export const buildAssignmentsFromUnits = (units: AssignmentUnit[]): Assignment[] => {
+    const grouped = new Map<string, string[]>();
+    units.forEach(unit => {
+        const list = grouped.get(unit.operationId) || [];
+        if (!list.includes(unit.operatorId)) {
+            list.push(unit.operatorId);
+        }
+        grouped.set(unit.operationId, list);
+    });
+
+    return Array.from(grouped.entries()).map(([operationId, operatorIds]) => ({
+        operationId,
+        operatorIds,
+    }));
+};
+
+const getAssignmentUnitKey = (unit: AssignmentUnit) =>
+    `${unit.operationId}::${unit.operatorId}`;
+
+const getAcceptedPlanScore = (candidate: NextStylePlanCandidate) => {
+    const kindScore = candidate.decision.kind === 'continuous' ? 2 : 1;
+    return (
+        kindScore * 1_000_000 +
+        candidate.quality.nextOutput * 10_000 +
+        Math.min(candidate.quality.nextWip, candidate.decision.prepWipLimit) * 100 -
+        candidate.decision.primaryDrop * 1_000 -
+        candidate.removedUnits
+    );
+};
+
+const getBlockedPlanScore = (candidate: NextStylePlanCandidate) => {
+    const overPrepCap = Math.max(0, candidate.quality.nextWip - candidate.decision.prepWipLimit);
+    return (
+        -candidate.decision.primaryDrop * 10_000 -
+        overPrepCap * 500 +
+        candidate.quality.nextOutput * 1_000 +
+        Math.min(candidate.quality.nextWip, candidate.decision.prepWipLimit) * 20 -
+        candidate.removedUnits
+    );
+};
+
+export function findSafeNextStylePlan(
+    initialAssignments: Assignment[],
+    evaluateCandidate: (assignments: Assignment[]) => Omit<NextStylePlanCandidate, 'assignments' | 'removedUnits'> | null
+): NextStylePlanCandidate | null {
+    const initialUnits = flattenAssignmentUnits(initialAssignments);
+    if (initialUnits.length === 0) return null;
+
+    const evaluateUnits = (units: AssignmentUnit[]): NextStylePlanCandidate | null => {
+        const assignments = buildAssignmentsFromUnits(units);
+        const evaluated = evaluateCandidate(assignments);
+        if (!evaluated) return null;
+        return {
+            assignments,
+            quality: evaluated.quality,
+            decision: evaluated.decision,
+            removedUnits: initialUnits.length - units.length,
+        };
+    };
+
+    const initialCandidate = evaluateUnits(initialUnits);
+    if (!initialCandidate) return null;
+    if (initialCandidate.decision.kind !== 'blocked') return initialCandidate;
+
+    let bestAccepted: NextStylePlanCandidate | null = null;
+    let bestBlocked: NextStylePlanCandidate = initialCandidate;
+    let activeUnits = initialUnits;
+
+    while (activeUnits.length > 1) {
+        const removalCandidates = activeUnits
+            .map(unitToRemove => {
+                const removeKey = getAssignmentUnitKey(unitToRemove);
+                const nextUnits = activeUnits.filter(unit => getAssignmentUnitKey(unit) !== removeKey);
+                const candidate = evaluateUnits(nextUnits);
+                return candidate ? { candidate, nextUnits } : null;
+            })
+            .filter((item): item is { candidate: NextStylePlanCandidate; nextUnits: AssignmentUnit[] } => !!item);
+
+        if (removalCandidates.length === 0) break;
+
+        removalCandidates.forEach(({ candidate }) => {
+            if (candidate.decision.kind === 'blocked') {
+                if (getBlockedPlanScore(candidate) > getBlockedPlanScore(bestBlocked)) {
+                    bestBlocked = candidate;
+                }
+                return;
+            }
+
+            if (!bestAccepted || getAcceptedPlanScore(candidate) > getAcceptedPlanScore(bestAccepted)) {
+                bestAccepted = candidate;
+            }
+        });
+
+        if (bestAccepted) return bestAccepted;
+
+        const nextStep = removalCandidates
+            .filter(({ candidate }) => candidate.decision.kind === 'blocked')
+            .sort((a, b) => getBlockedPlanScore(b.candidate) - getBlockedPlanScore(a.candidate))[0];
+
+        if (!nextStep) break;
+        activeUnits = nextStep.nextUnits;
+    }
+
+    return bestAccepted || bestBlocked;
+}
+
+
+export function AIProductionPlanner(): React.ReactNode {
     const { user } = useAuth();
     const { toast } = useToast();
     const { data: config } = useConfiguration();
@@ -287,22 +611,21 @@ export function ProductionPlanner(): React.ReactNode {
     }, [config?.defaultSwitchDelay]);
 
     const [isPublishing, setIsPublishing] = useState(false);
+    const [isBalancing, setIsBalancing] = useState(false);
+    const [aiReasoning, setAiReasoning] = useState<string | null>(null);
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
+    const [lastNextStyleDecision, setLastNextStyleDecision] = useState<NextStyleFlowDecision | null>(null);
     const [variantAssignments, setVariantAssignments] = useState<Record<string, Assignment[]>>({});
     const [nextVariantAssignments, setNextVariantAssignments] = useState<Record<string, Assignment[]>>({});
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
-    const [autoAssignMode, setAutoAssignMode] = useState<AutoAssignMode>('balanced');
-    const [roleLockSoftEnabled, setRoleLockSoftEnabled] = useState<boolean>(false);
     const [availableOperatorIds, setAvailableOperatorIds] = useState<string[]>([]);
     const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
     const [enableThreadConstraints, setEnableThreadConstraints] = useState<boolean>(true);
     const [threadInventoryByColor, setThreadInventoryByColor] = useState<Record<string, number>>({});
     const [operatorAttendance, setOperatorAttendance] = useState<Record<string, { startDelay: number, shiftExtension: number }>>({});
     const [shiftStartTime, setShiftStartTime] = useState<string>("07:30");
-    const [enableRollingReplan, setEnableRollingReplan] = useState<boolean>(true);
-    const [replanIntervalMinutes, setReplanIntervalMinutes] = useState<number>(60);
-    const [lastReplanAt, setLastReplanAt] = useState<Date | null>(null);
+    const [breaks, setBreaks] = useState<BreakConfig[]>(() => cloneDefaultBreaks());
     const [showExecutionGuide, setShowExecutionGuide] = useState<boolean>(true);
 
     // Queries
@@ -541,16 +864,16 @@ export function ProductionPlanner(): React.ReactNode {
                 const next = { ...prev };
                 types.forEach(t => {
                     // Always try to use global count first, defaulting to 5
-                    // We only want to keep 'prev' if it was explicitly user-set in this session, 
-                    // but we don't track that easily. 
+                    // We only want to keep 'prev' if it was explicitly user-set in this session,
+                    // but we don't track that easily.
                     // Better approach: Sync with global settings unless we want to support temporary overrides?
-                    // User expectation is "Settings -> Planner". 
+                    // User expectation is "Settings -> Planner".
                     // So we should update 'next[t]' to global count if the global count exists or if it's a new entry.
                     // However, if the user manually changed it in the Planner UI *before* we simulate, do we want to overwrite?
                     // Given the bug, let's prioritize Global Settings.
 
                     // Logic: If 'globalMachineCounts' has a value, use it. Else use 5.
-                    // What if the user wants to override temporarily? 
+                    // What if the user wants to override temporarily?
                     // The UI for "Machine Inventory (Constraints)" uses 'machineCounts' state.
                     // If we overwrite it here on every render where style/global changes, it might be annoying if they are typing.
                     // But this effect only runs on [selectedStyle, selectedNextStyle, globalMachineCounts].
@@ -609,11 +932,13 @@ export function ProductionPlanner(): React.ReactNode {
     useEffect(() => {
         setAssignments([]);
         setVariantAssignments({});
+        setLastNextStyleDecision(null);
     }, [selectedStyle?.id]);
 
     useEffect(() => {
         setNextAssignments([]);
         setNextVariantAssignments({});
+        setLastNextStyleDecision(null);
     }, [selectedNextStyle?.id]);
 
     // Memoize operator loads for calculations
@@ -626,1029 +951,6 @@ export function ProductionPlanner(): React.ReactNode {
         });
         return loads;
     }, [assignments]);
-
-    // Helper: Auto Assign (Fluid Capacity Solver + Hill Climbing)
-    // Helper: Compute Assignments for a given style (Refactored for reuse)
-    const computeAssignments = (
-        targetStyle: GarmentStyle,
-        autoMode: AutoAssignMode = 'balanced',
-        roleLockSoft: boolean = false
-    ): Assignment[] => {
-        const isConservative = autoMode === 'conservative';
-        // Init Assignments
-        const newAssignments = new Map<string, string[]>();
-        targetStyle.operations.forEach(op => newAssignments.set(op.id, []));
-        const operationById = new Map(targetStyle.operations.map(op => [op.id, op]));
-        const allDependencyIds = new Set(targetStyle.operations.flatMap(op => op.dependencies || []));
-        const finalOperations = targetStyle.operations.filter(op => !allDependencyIds.has(op.id));
-        const finalOperationIds = new Set(finalOperations.map(op => op.id));
-        const operatorById = new Map(operators.map(op => [op.id, op]));
-        const upstreamByOpId = new Map<string, string[]>();
-        const downstreamByOpId = new Map<string, string[]>();
-        targetStyle.operations.forEach(op => {
-            const deps = [...(op.dependencies || [])];
-            upstreamByOpId.set(op.id, deps);
-            deps.forEach(depId => {
-                const list = downstreamByOpId.get(depId) || [];
-                list.push(op.id);
-                downstreamByOpId.set(depId, list);
-            });
-        });
-        const immediatePairs: Array<{ upstreamId: string; downstreamId: string }> = [];
-        downstreamByOpId.forEach((downstreamIds, upstreamId) => {
-            downstreamIds.forEach(downstreamId => immediatePairs.push({ upstreamId, downstreamId }));
-        });
-
-        const candidatesPool = operators.filter(o => availableOperatorIds.includes(o.id));
-        const styleTotalSmv = targetStyle.totalSmv || targetStyle.operations.reduce((sum, op) => sum + (op.smv || 0), 0);
-        const demandMinutes = Math.max(0, (targetStyle.quantity || 0) * styleTotalSmv);
-        const capacityMinutes = Math.max(1, availableMinutes * Math.max(1, candidatesPool.length));
-        const demandPressure = demandMinutes / capacityMinutes;
-        const isHighDemand = isConservative && demandPressure >= 0.85;
-        const roleLockActive = roleLockSoft && !(isConservative && demandPressure >= 0.9);
-        const roleAnchorByOperator = new Map<string, string>();
-        const objectiveWeights = isConservative
-            ? {
-                ...PLANNING_OBJECTIVE_WEIGHTS,
-                starvation: isHighDemand ? 30 : 34,
-                fragmentation: isHighDemand ? 16 : 22,
-                shortDuration: isHighDemand ? 10 : 14,
-                multitask: isHighDemand ? 16 : 24,
-                downstreamOverlap: isHighDemand ? 24 : 36,
-                fanOut: isHighDemand ? 18 : 28,
-                tinyBatch: isHighDemand ? 14 : 26,
-                roleLock: isHighDemand ? 20 : 30,
-            }
-            : PLANNING_OBJECTIVE_WEIGHTS;
-        const MAX_LOAD = isConservative ? (isHighDemand ? 3 : 2) : 3;
-        const DEFAULT_OP_FAN_OUT_CAP = isConservative ? (isHighDemand ? 2 : 1) : 2;
-        const HARD_BOTTLENECK_FLOW_THRESHOLD = isConservative ? (isHighDemand ? 0.76 : 0.72) : 0.82;
-        const HARD_BOTTLENECK_FANOUT_CAP = isConservative ? (isHighDemand ? 3 : 2) : 3;
-        const ROLE_LOCK_FLOW_OVERRIDE = isConservative ? (isHighDemand ? 0.68 : 0.72) : 0.8;
-        const ROLE_LOCK_QUEUE_GAP_OVERRIDE = isConservative ? (isHighDemand ? 16 : 12) : 10;
-        const getLoad = (map: Map<string, string[]>, id: string) => {
-            let load = 0;
-            map.forEach(ids => { if (ids.includes(id)) load++; });
-            return load;
-        };
-        const cloneAssignMap = (map: Map<string, string[]>) => {
-            const cloned = new Map<string, string[]>();
-            map.forEach((value, key) => cloned.set(key, [...value]));
-            return cloned;
-        };
-        const getMachineCap = (opId: string) => {
-            const op = operationById.get(opId);
-            if (!op) return 1;
-            return Math.max(1, machineCounts[op.machineType] || 1);
-        };
-        const getAllowedFanOutCap = (
-            opId: string,
-            metrics?: Map<string, { effective: number; local: number }>,
-            bottleneckOpId?: string | null
-        ) => {
-            const machineCap = getMachineCap(opId);
-            const baseCap = Math.min(machineCap, DEFAULT_OP_FAN_OUT_CAP);
-            if (!metrics) return baseCap;
-
-            const stat = metrics.get(opId);
-            const local = stat?.local || 0;
-            const effective = stat?.effective || 0;
-            const queueGap = Math.max(0, local - effective);
-
-            if (isConservative) {
-                const downstreamIds = downstreamByOpId.get(opId) || [];
-                const downstreamPressure = downstreamIds.reduce((sum, dId) => {
-                    const dStat = metrics.get(dId);
-                    if (!dStat) return sum;
-                    return sum + Math.max(0, (dStat.local || 0) - (dStat.effective || 0));
-                }, 0);
-
-                const unlockSecondForUpstream =
-                    downstreamIds.length > 0 &&
-                    machineCap >= 2 &&
-                    (queueGap >= 8 || downstreamPressure >= 12);
-
-                if (unlockSecondForUpstream) {
-                    return Math.min(machineCap, 2);
-                }
-            }
-
-            if (machineCap < 3 || bottleneckOpId !== opId) return baseCap;
-            const flowRatio = local > 0 ? effective / local : 1;
-            const isHardBottleneck = local > 0 && flowRatio < HARD_BOTTLENECK_FLOW_THRESHOLD && queueGap >= 8;
-            return isHardBottleneck ? Math.min(machineCap, HARD_BOTTLENECK_FANOUT_CAP) : baseCap;
-        };
-        const isImmediateUpstreamDownstreamPair = (aOpId: string, bOpId: string) =>
-            (upstreamByOpId.get(aOpId) || []).includes(bOpId) ||
-            (upstreamByOpId.get(bOpId) || []).includes(aOpId);
-        const hasDownstreamOverlap = (
-            assignMap: Map<string, string[]>,
-            operatorId: string,
-            targetOpId: string,
-            strict: boolean
-        ) => {
-            const assignedOpIds = Array.from(assignMap.entries())
-                .filter(([, ids]) => ids.includes(operatorId))
-                .map(([opId]) => opId);
-
-            for (const opId of assignedOpIds) {
-                if (!isImmediateUpstreamDownstreamPair(opId, targetOpId)) continue;
-                if (strict) return true;
-                const currentCount = assignMap.get(opId)?.length || 0;
-                const targetCount = assignMap.get(targetOpId)?.length || 0;
-                if (currentCount > 1 || targetCount > 1) return true;
-            }
-            return false;
-        };
-        const isDownstreamOverlapRestricted = (
-            assignMap: Map<string, string[]>,
-            operatorId: string,
-            targetOpId: string
-        ) => hasDownstreamOverlap(assignMap, operatorId, targetOpId, isConservative);
-        const shouldRoleUnlockForTarget = (
-            targetOpId: string,
-            metrics: Map<string, { effective: number; local: number }> | undefined,
-            bottleneckOpId: string | null | undefined
-        ) => {
-            if (!metrics) return false;
-            if (bottleneckOpId && targetOpId === bottleneckOpId) return true;
-            const stat = metrics.get(targetOpId);
-            if (!stat) return false;
-            const local = stat.local || 0;
-            const effective = stat.effective || 0;
-            const queueGap = Math.max(0, local - effective);
-            const flowRatio = local > 0 ? effective / local : 1;
-            return queueGap >= ROLE_LOCK_QUEUE_GAP_OVERRIDE || flowRatio <= ROLE_LOCK_FLOW_OVERRIDE;
-        };
-        const isRoleLockRestricted = (
-            assignMap: Map<string, string[]>,
-            operatorId: string,
-            targetOpId: string,
-            metrics?: Map<string, { effective: number; local: number }>,
-            bottleneckOpId?: string | null
-        ) => {
-            if (!roleLockActive) return false;
-            const anchorOpId = roleAnchorByOperator.get(operatorId);
-            if (!anchorOpId) return false;
-            if (anchorOpId === targetOpId) return false;
-            if ((assignMap.get(targetOpId) || []).includes(operatorId)) return false;
-            if (!(assignMap.get(anchorOpId) || []).includes(operatorId)) return false;
-            if (shouldRoleUnlockForTarget(targetOpId, metrics, bottleneckOpId)) return false;
-            return true;
-        };
-        const initializeRoleAnchors = (assignMap: Map<string, string[]>) => {
-            if (!roleLockActive) return;
-            candidatesPool.forEach(operator => {
-                if (roleAnchorByOperator.has(operator.id)) return;
-                const assignedOpIds = Array.from(assignMap.entries())
-                    .filter(([, ids]) => ids.includes(operator.id))
-                    .map(([opId]) => opId);
-                if (assignedOpIds.length === 0) return;
-
-                const anchorOpId = assignedOpIds
-                    .slice()
-                    .sort((aOpId, bOpId) => {
-                        const aPerf = learnedPerformance[operator.id]?.[aOpId] || 1;
-                        const bPerf = learnedPerformance[operator.id]?.[bOpId] || 1;
-                        if (bPerf !== aPerf) return bPerf - aPerf;
-
-                        const aSmv = operationById.get(aOpId)?.smv || 0;
-                        const bSmv = operationById.get(bOpId)?.smv || 0;
-                        if (bSmv !== aSmv) return bSmv - aSmv;
-                        return aOpId.localeCompare(bOpId);
-                    })[0];
-
-                roleAnchorByOperator.set(operator.id, anchorOpId);
-            });
-        };
-        const runtimeEvalCache = new Map<string, { completionMinute: number; idleMinutes: number }>();
-        const serializeAssignMap = (map: Map<string, string[]>) =>
-            Array.from(map.entries())
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([opId, ids]) => `${opId}:${[...ids].sort().join(',')}`)
-                .join('|');
-        const evaluateScheduleOutcome = (assignMap: Map<string, string[]>) => {
-            const cacheKey = serializeAssignMap(assignMap);
-            const cached = runtimeEvalCache.get(cacheKey);
-            if (cached) return cached;
-
-            const assignArray = Array.from(assignMap.entries()).map(([operationId, operatorIds]) => ({ operationId, operatorIds }));
-            const sim = simulateProductionSchedule(
-                targetStyle,
-                assignArray,
-                operators,
-                machineCounts,
-                availableMinutes,
-                switchDelay,
-                operatorAttendance,
-                learnedPerformance,
-                undefined,
-                threadConstraintConfig
-            );
-
-            const finalEvents = Object.values(sim.schedule)
-                .flat()
-                .filter(event => finalOperationIds.has(event.opId))
-                .sort((a, b) => a.end - b.end);
-
-            const orderQty = Math.max(0, targetStyle.quantity || 0);
-            let completionMinute = Number.POSITIVE_INFINITY;
-            if (orderQty > 0) {
-                let cumulative = 0;
-                for (const event of finalEvents) {
-                    cumulative += event.count;
-                    if (cumulative >= orderQty) {
-                        completionMinute = event.end;
-                        break;
-                    }
-                }
-            } else if (finalEvents.length > 0) {
-                completionMinute = Math.max(...finalEvents.map(event => event.end));
-            }
-
-            let idleMinutes = 0;
-            candidatesPool.forEach(operator => {
-                const attendance = operatorAttendance[operator.id] || { startDelay: 0, shiftExtension: 0 };
-                const availableForOperator = Math.max(0, availableMinutes + (attendance.shiftExtension || 0) - (attendance.startDelay || 0));
-                const busyMinutes = (sim.schedule[operator.id] || []).reduce(
-                    (sum, event) => sum + Math.max(0, event.end - event.start),
-                    0
-                );
-                idleMinutes += Math.max(0, availableForOperator - busyMinutes);
-            });
-
-            const result = { completionMinute, idleMinutes };
-            runtimeEvalCache.set(cacheKey, result);
-            return result;
-        };
-
-        // Phase 1: Coverage (Greedy)
-        targetStyle.operations.forEach(op => {
-            const baseCandidates = candidatesPool
-                .filter(o => o.skills?.includes(op.machineType.trim() as any)) // Use trimmed match
-                .filter(o => getLoad(newAssignments, o.id) < MAX_LOAD)
-                .sort((a, b) => {
-                    if (isConservative) {
-                        const aLoad = getLoad(newAssignments, a.id);
-                        const bLoad = getLoad(newAssignments, b.id);
-                        if (aLoad !== bLoad) return aLoad - bLoad;
-                    }
-                    const aScore = (a.efficiencyRating || 100) * (learnedPerformance[a.id]?.[op.id] || 1);
-                    const bScore = (b.efficiencyRating || 100) * (learnedPerformance[b.id]?.[op.id] || 1);
-                    return bScore - aScore;
-                });
-            const candidates = isConservative
-                ? (() => {
-                    const strict = baseCandidates.filter(candidate =>
-                        !hasDownstreamOverlap(newAssignments, candidate.id, op.id, true)
-                    );
-                    return strict.length > 0 ? strict : baseCandidates;
-                })()
-                : baseCandidates;
-            const roleFilteredCandidates = roleLockActive
-                ? (() => {
-                    const aligned = candidates.filter(candidate => {
-                        const anchorOpId = roleAnchorByOperator.get(candidate.id);
-                        return !anchorOpId || anchorOpId === op.id;
-                    });
-                    return aligned.length > 0 ? aligned : candidates;
-                })()
-                : candidates;
-
-            if (roleFilteredCandidates.length > 0) {
-                const best = roleFilteredCandidates[0];
-                const list = newAssignments.get(op.id) || [];
-                newAssignments.set(op.id, [...list, best.id]);
-                if (roleLockActive && !roleAnchorByOperator.has(best.id)) {
-                    roleAnchorByOperator.set(best.id, op.id);
-                }
-            }
-        });
-        initializeRoleAnchors(newAssignments);
-
-        // Helper to Calc Global Min (Flow Aware + Fluid Output)
-        const calcGlobalMin = (assignMap: Map<string, string[]>) => {
-            const assignArray = Array.from(assignMap.entries()).map(([k, v]) => ({ operationId: k, operatorIds: v }));
-            const solved = solveFluidCapacity(
-                targetStyle,
-                assignArray,
-                operators,
-                machineCounts,
-                availableMinutes
-            );
-
-            // Dependence Prop
-            const metrics = new Map<string, { effective: number, local: number }>();
-
-            // 1. Local
-            targetStyle.operations.forEach(op => {
-                const res = solved.get(op.id);
-                metrics.set(op.id, { effective: res?.localOutput || 0, local: res?.localOutput || 0 });
-            });
-
-            // 2. Propagate (Simple Loop)
-            for (let k = 0; k < 3; k++) {
-                targetStyle.operations.forEach(op => {
-                    const local = metrics.get(op.id)?.local || 0;
-                    if (op.dependencies?.length > 0) {
-                        const upstreams = op.dependencies.map(d => metrics.get(d)?.effective ?? Infinity);
-                        const limit = Math.min(...upstreams);
-                        metrics.set(op.id, { local, effective: Math.min(local, limit) });
-                    }
-                });
-            }
-
-            // Find Min Effective
-            let min = Infinity;
-            let botId: string | null = null;
-            targetStyle.operations.forEach(op => {
-                const eff = metrics.get(op.id)?.effective || 0;
-                if (eff < min) { min = eff; botId = op.id; }
-            });
-
-            const finalMin = finalOperations.length > 0
-                ? Math.min(...finalOperations.map(op => metrics.get(op.id)?.effective || 0))
-                : min;
-
-            // "Fragmentation Penalty"
-            let fragmentationPenalty = 0;
-            const opLoads = new Map<string, number>();
-            assignMap.forEach(ids => ids.forEach(uid => opLoads.set(uid, (opLoads.get(uid) || 0) + 1)));
-
-            opLoads.forEach(count => {
-                if (count > 1) {
-                    fragmentationPenalty += (count - 1) * 0.25;
-                }
-            });
-            let multitaskPenalty = 0;
-            const multitaskThreshold = isConservative ? 1 : 2;
-            opLoads.forEach(count => {
-                if (count > multitaskThreshold) {
-                    multitaskPenalty += count - multitaskThreshold;
-                }
-            });
-            let downstreamOverlapPenalty = 0;
-            opLoads.forEach((_, uid) => {
-                const assignedOpIds = Array.from(assignMap.entries())
-                    .filter(([, ids]) => ids.includes(uid))
-                    .map(([opId]) => opId);
-
-                for (let i = 0; i < assignedOpIds.length; i++) {
-                    for (let j = i + 1; j < assignedOpIds.length; j++) {
-                        const aOpId = assignedOpIds[i];
-                        const bOpId = assignedOpIds[j];
-                        if (!isImmediateUpstreamDownstreamPair(aOpId, bOpId)) continue;
-                        if (isConservative) {
-                            downstreamOverlapPenalty += 1;
-                            continue;
-                        }
-                        const aCount = assignMap.get(aOpId)?.length || 0;
-                        const bCount = assignMap.get(bOpId)?.length || 0;
-                        if (aCount > 1 || bCount > 1) {
-                            downstreamOverlapPenalty += 1;
-                        }
-                    }
-                }
-            });
-            let fanOutPenalty = 0;
-            targetStyle.operations.forEach(op => {
-                const assignedCount = assignMap.get(op.id)?.length || 0;
-                const allowedCap = getAllowedFanOutCap(op.id, metrics, botId);
-                if (assignedCount > allowedCap) {
-                    fanOutPenalty += (assignedCount - allowedCap);
-                }
-            });
-
-            // MIN DURATION PENALTY (< 30 mins)
-            let minDurationPenalties = 0;
-            const MN_MIN = isConservative ? 60 : 45;
-
-            targetStyle.operations.forEach(op => {
-                const res = solved.get(op.id);
-                if (res && res.finalWeights) {
-                    res.finalWeights.forEach((weight, uid) => {
-                        const mins = weight * availableMinutes;
-                        if (mins > 0.01 && mins < MN_MIN) {
-                            minDurationPenalties++;
-                        }
-                    });
-                }
-            });
-            let tinyBatchPenalty = 0;
-            const minAssignedPcs = isConservative ? 6 : 4;
-            targetStyle.operations.forEach(op => {
-                const res = solved.get(op.id);
-                if (!res || !res.finalWeights || (res.localOutput || 0) <= 0) return;
-                res.finalWeights.forEach(weight => {
-                    const assignedPcs = (res.localOutput || 0) * weight;
-                    if (assignedPcs > 0 && assignedPcs < minAssignedPcs) {
-                        tinyBatchPenalty += (minAssignedPcs - assignedPcs) / minAssignedPcs;
-                    }
-                });
-            });
-            let roleDriftPenalty = 0;
-            if (roleLockActive) {
-                assignMap.forEach((ids, opId) => {
-                    ids.forEach(uid => {
-                        const anchorOpId = roleAnchorByOperator.get(uid);
-                        if (!anchorOpId || anchorOpId === opId) return;
-                        if (shouldRoleUnlockForTarget(opId, metrics, botId)) return;
-                        roleDriftPenalty += 1;
-                    });
-                });
-            }
-
-            // MACHINE SHARING PENALTY
-            let machineOverflowPenalty = 0;
-            targetStyle.operations.forEach(op => {
-                const assignedCount = assignMap.get(op.id)?.length || 0;
-                const mCount = machineCounts[op.machineType] || 1;
-                if (assignedCount > mCount) {
-                    machineOverflowPenalty += (assignedCount - mCount);
-                }
-            });
-
-            let starvationPenalty = 0;
-            metrics.forEach(({ effective, local }) => {
-                starvationPenalty += Math.max(0, local - effective);
-            });
-
-            // End-of-line completion proxy: bias score toward final operation throughput.
-            const finalStarvationPenalty = finalOperations.reduce((sum, op) => {
-                const item = metrics.get(op.id);
-                if (!item) return sum;
-                return sum + Math.max(0, item.local - item.effective);
-            }, 0);
-
-            const throughputScore = (min * 0.35) + (finalMin * 0.65);
-            const score =
-                (throughputScore * objectiveWeights.throughput) -
-                (starvationPenalty * objectiveWeights.starvation) -
-                (finalStarvationPenalty * (objectiveWeights.starvation * 0.6)) -
-                (fragmentationPenalty * objectiveWeights.fragmentation) -
-                (minDurationPenalties * objectiveWeights.shortDuration) -
-                (machineOverflowPenalty * objectiveWeights.machineOverflow) -
-                (multitaskPenalty * objectiveWeights.multitask) -
-                (downstreamOverlapPenalty * objectiveWeights.downstreamOverlap) -
-                (fanOutPenalty * objectiveWeights.fanOut) -
-                (tinyBatchPenalty * objectiveWeights.tinyBatch) -
-                (roleDriftPenalty * objectiveWeights.roleLock);
-
-            return { min, finalMin, score, botId, metrics };
-        };
-
-        // Phase 1b: Soft role-lock cleanup.
-        // Keep operators near their anchor operation unless removing the extra assignment hurts badly.
-        if (roleLockActive) {
-            let cleanupPass = 0;
-            while (cleanupPass < 8) {
-                cleanupPass++;
-                const baseline = calcGlobalMin(newAssignments);
-                let changed = false;
-
-                for (const [uid, anchorOpId] of roleAnchorByOperator.entries()) {
-                    const assignedOpIds = Array.from(newAssignments.entries())
-                        .filter(([, ids]) => ids.includes(uid))
-                        .map(([opId]) => opId)
-                        .filter(opId => opId !== anchorOpId);
-
-                    for (const opId of assignedOpIds) {
-                        if (shouldRoleUnlockForTarget(opId, baseline.metrics, baseline.botId)) continue;
-                        const users = newAssignments.get(opId) || [];
-                        if (users.length <= 1) continue;
-
-                        const simMap = cloneAssignMap(newAssignments);
-                        simMap.set(opId, users.filter(id => id !== uid));
-                        const simEval = calcGlobalMin(simMap);
-                        if (simEval.score < baseline.score - 0.75) continue;
-
-                        newAssignments.set(opId, users.filter(id => id !== uid));
-                        changed = true;
-                        break;
-                    }
-
-                    if (changed) break;
-                }
-
-                if (!changed) break;
-            }
-        }
-
-        // Phase 2: Hill Climbing
-        let iterations = 0;
-        const maxIterations = targetStyle.operations.length * (isConservative ? 2 : 4);
-
-        while (iterations < maxIterations) {
-            iterations++;
-            const currentEval = calcGlobalMin(newAssignments);
-            const { min: currentGlobalMin, score: currentScore, botId: bottleneckOpId, metrics: currentMetrics } = currentEval;
-
-            if (!bottleneckOpId) break;
-            const bottleneckOp = targetStyle.operations.find(o => o.id === bottleneckOpId)!;
-
-            const mCount = machineCounts[bottleneckOp.machineType] || 1;
-            const mCap = (mCount * availableMinutes) / (bottleneckOp.smv / 60);
-            if (currentGlobalMin >= mCap - 0.1) break;
-
-            const currentAssignedCount = newAssignments.get(bottleneckOpId)?.length || 0;
-            const bottleneckCap = getAllowedFanOutCap(bottleneckOpId, currentMetrics, bottleneckOpId);
-            const isHeadcountCapped = currentAssignedCount >= bottleneckCap;
-
-            let bestMove = null;
-            let bestNewScore = currentScore;
-            let bestHarvest: { addOpId: string, addUser: string } | null = null;
-            let bestSwap: { opId: string, add: string, remove: string } | null = null;
-
-            const currentLoads = new Map<string, number>();
-            candidatesPool.forEach(o => currentLoads.set(o.id, getLoad(newAssignments, o.id)));
-
-            // 3. Direct Add
-            if (!isHeadcountCapped) {
-                const candidates = candidatesPool
-                    .filter(o => o.skills?.includes(bottleneckOp.machineType))
-                    .filter(o => (currentLoads.get(o.id) || 0) < MAX_LOAD)
-                    .filter(o => !(newAssignments.get(bottleneckOpId!)?.includes(o.id)))
-                    .filter(o => !isDownstreamOverlapRestricted(newAssignments, o.id, bottleneckOpId))
-                    .filter(o => !isRoleLockRestricted(newAssignments, o.id, bottleneckOpId, currentMetrics, bottleneckOpId));
-
-                for (const candidate of candidates) {
-                    const simMap = new Map<string, string[]>();
-                    newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-                    simMap.set(bottleneckOpId, [...(simMap.get(bottleneckOpId) || []), candidate.id]);
-
-                    const { score } = calcGlobalMin(simMap);
-                    if (score > bestNewScore) {
-                        bestNewScore = score;
-                        bestMove = candidate.id;
-                    }
-                }
-            }
-
-            // 4. Swap/Offload
-            if (!bestMove) {
-                const bottleneckOperators = operators.filter(o => newAssignments.get(bottleneckOpId)?.includes(o.id));
-                for (const botOp of bottleneckOperators) {
-                    if (currentLoads.get(botOp.id)! <= 1) continue;
-
-                    const otherOpIds = Array.from(newAssignments.entries())
-                        .filter(([opId, users]) => opId !== bottleneckOpId && users.includes(botOp.id))
-                        .map(([opId]) => opId);
-
-                    for (const otherOpId of otherOpIds) {
-                        const otherOp = targetStyle.operations.find(o => o.id === otherOpId)!;
-                        const swapCandidates = candidatesPool
-                            .filter(o => o.id !== botOp.id)
-                            .filter(o => o.skills?.includes(otherOp.machineType))
-                            .filter(o => (currentLoads.get(o.id) || 0) < MAX_LOAD)
-                            .filter(o => !(newAssignments.get(otherOpId)?.includes(o.id)))
-                            .filter(o => !isDownstreamOverlapRestricted(newAssignments, o.id, otherOpId))
-                            .filter(o => !isRoleLockRestricted(newAssignments, o.id, otherOpId, currentMetrics, bottleneckOpId));
-
-                        for (const candidate of swapCandidates) {
-                            const simMap = new Map<string, string[]>();
-                            newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-                            // Add replacer
-                            simMap.set(otherOpId, [...(simMap.get(otherOpId) || []), candidate.id]);
-                            // Remove bottleneck op from OTHER task
-                            simMap.set(otherOpId, simMap.get(otherOpId)!.filter(id => id !== botOp.id));
-
-                            const { score } = calcGlobalMin(simMap);
-                            if (score > bestNewScore) {
-                                bestNewScore = score;
-                                bestSwap = { opId: otherOpId, add: candidate.id, remove: botOp.id };
-                            }
-                        }
-                    }
-                }
-            }
-
-            // 5. Steal (Reallocate from non-bottleneck)
-            let bestSteal: { opId: string, add: string, removeOpFrom: string } | null = null;
-            if (!isConservative && !bestMove && !bestSwap && !isHeadcountCapped) {
-                const strongCandidates = candidatesPool
-                    .filter(o => o.skills?.includes(bottleneckOp.machineType))
-                    .filter(o => (currentLoads.get(o.id) || 0) >= MAX_LOAD)
-                    .filter(o => !(newAssignments.get(bottleneckOpId!)?.includes(o.id)))
-                    .filter(o => !isDownstreamOverlapRestricted(newAssignments, o.id, bottleneckOpId))
-                    .filter(o => !isRoleLockRestricted(newAssignments, o.id, bottleneckOpId, currentMetrics, bottleneckOpId));
-
-                for (const candidate of strongCandidates) {
-                    const currentAssignments = Array.from(newAssignments.entries())
-                        .filter(([k, v]) => v.includes(candidate.id) && k !== bottleneckOpId);
-
-                    for (const [sourceOpId] of currentAssignments) {
-                        const simMap = new Map<string, string[]>();
-                        newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-
-                        simMap.set(sourceOpId, simMap.get(sourceOpId)!.filter(id => id !== candidate.id));
-                        simMap.set(bottleneckOpId, [...(simMap.get(bottleneckOpId) || []), candidate.id]);
-
-                        const { score } = calcGlobalMin(simMap);
-                        if (score > bestNewScore) {
-                            bestNewScore = score;
-                            bestSteal = { opId: bottleneckOpId, add: candidate.id, removeOpFrom: sourceOpId };
-                        }
-                    }
-                }
-            }
-
-            if (bestMove) {
-                const list = newAssignments.get(bottleneckOpId) || [];
-                newAssignments.set(bottleneckOpId, [...list, bestMove]);
-            } else if (bestSwap) {
-                const list = newAssignments.get(bestSwap.opId) || [];
-                newAssignments.set(bestSwap.opId, [...list, bestSwap.add]);
-                const reducedList = newAssignments.get(bestSwap.opId)!.filter(id => id !== bestSwap.remove);
-                newAssignments.set(bestSwap.opId, reducedList);
-            } else if (bestSteal) {
-                const sourceList = newAssignments.get(bestSteal.removeOpFrom) || [];
-                newAssignments.set(bestSteal.removeOpFrom, sourceList.filter(id => id !== bestSteal.add));
-                const targetList = newAssignments.get(bestSteal.opId) || [];
-                newAssignments.set(bestSteal.opId, [...targetList, bestSteal.add]);
-            } else {
-                // 6. Focus (Shed non-bottleneck tasks without replacement)
-                let bestFocus: { removeOpId: string, removeUser: string } | null = null;
-                const bottleneckOperators = operators.filter(o => newAssignments.get(bottleneckOpId)?.includes(o.id));
-                for (const botOp of bottleneckOperators) {
-                    const otherAssignments = Array.from(newAssignments.entries())
-                        .filter(([k, v]) => v.includes(botOp.id) && k !== bottleneckOpId);
-                    for (const [otherOpId] of otherAssignments) {
-                        const simMap = new Map<string, string[]>();
-                        newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-                        simMap.set(otherOpId, simMap.get(otherOpId)!.filter(id => id !== botOp.id));
-                        const { score } = calcGlobalMin(simMap);
-                        if (score > bestNewScore) {
-                            bestNewScore = score;
-                            bestFocus = { removeOpId: otherOpId, removeUser: botOp.id };
-                        }
-                    }
-                }
-
-                if (bestFocus) {
-                    const list = newAssignments.get(bestFocus.removeOpId) || [];
-                    newAssignments.set(bestFocus.removeOpId, list.filter(id => id !== bestFocus.removeUser));
-                } else {
-                    // 7. Prune ... 
-                    let bestPrune: { opId: string, removeUser: string } | null = null;
-                    const allOps = Array.from(newAssignments.keys());
-                    for (const opId of allOps) {
-                        const users = newAssignments.get(opId) || [];
-                        if (users.length <= 1) continue;
-                        for (const uid of users) {
-                            const simMap = new Map<string, string[]>();
-                            newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-                            simMap.set(opId, simMap.get(opId)!.filter(id => id !== uid));
-                            const { score } = calcGlobalMin(simMap);
-                            if (score > bestNewScore) {
-                                bestNewScore = score;
-                                bestPrune = { opId, removeUser: uid };
-                            }
-                        }
-                    }
-
-                    if (bestPrune) {
-                        const list = newAssignments.get(bestPrune.opId) || [];
-                        newAssignments.set(bestPrune.opId, list.filter(id => id !== bestPrune.removeUser));
-                    } else {
-                        // 8. Deconflict
-                        let bestDeconflict: { opId: string, removeUser: string } | null = null;
-                        const criticalUsers = new Set<string>();
-                        newAssignments.forEach((users, opId) => { if (users.length === 1) criticalUsers.add(users[0]); });
-                        for (const critUid of criticalUsers) {
-                            const sharedOps = Array.from(newAssignments.entries()).filter(([k, v]) => v.includes(critUid) && v.length > 1).map(([k]) => k);
-                            for (const opId of sharedOps) {
-                                const simMap = new Map<string, string[]>();
-                                newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-                                simMap.set(opId, simMap.get(opId)!.filter(id => id !== critUid));
-                                const { score } = calcGlobalMin(simMap);
-                                const biasedScore = score + 0.5;
-                                if (biasedScore > bestNewScore) {
-                                    bestNewScore = biasedScore;
-                                    bestDeconflict = { opId, removeUser: critUid };
-                                }
-                            }
-                        }
-
-                        if (bestDeconflict) {
-                            const list = newAssignments.get(bestDeconflict.opId) || [];
-                            newAssignments.set(bestDeconflict.opId, list.filter(id => id !== bestDeconflict.removeUser));
-                        } else {
-                            // 9. Swap-Clean
-                            let bestSwapClean: { removeOpId: string, removeUser: string, addOpId: string } | null = null;
-                            const violatedOps = targetStyle.operations.filter(op => {
-                                const count = newAssignments.get(op.id)?.length || 0;
-                                const mCount = machineCounts[op.machineType] || 1;
-                                return count > mCount;
-                            });
-                            for (const op of violatedOps) {
-                                const users = newAssignments.get(op.id) || [];
-                                for (const uid of users) {
-                                    const userObj = operators.find(u => u.id === uid);
-                                    if (!userObj) continue;
-                                    const possibleMoves = targetStyle.operations.filter(o =>
-                                        o.id !== op.id &&
-                                        userObj.skills?.includes(o.machineType) &&
-                                        !(newAssignments.get(o.id)?.includes(uid)) &&
-                                        !isRoleLockRestricted(newAssignments, uid, o.id, currentMetrics, bottleneckOpId)
-                                    );
-                                    for (const moveOp of possibleMoves) {
-                                        const simMap = new Map<string, string[]>();
-                                        newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-                                        simMap.set(op.id, simMap.get(op.id)!.filter(id => id !== uid));
-                                        simMap.set(moveOp.id, [...(simMap.get(moveOp.id) || []), uid]);
-                                        const { score } = calcGlobalMin(simMap);
-                                        if (score > bestNewScore) {
-                                            bestNewScore = score;
-                                            bestSwapClean = { removeOpId: op.id, removeUser: uid, addOpId: moveOp.id };
-                                        }
-                                    }
-                                }
-                            }
-
-                            if (bestSwapClean) {
-                                const list = newAssignments.get(bestSwapClean.removeOpId) || [];
-                                newAssignments.set(bestSwapClean.removeOpId, list.filter(id => id !== bestSwapClean.removeUser));
-                                const targetList = newAssignments.get(bestSwapClean.addOpId) || [];
-                                newAssignments.set(bestSwapClean.addOpId, [...targetList, bestSwapClean.removeUser]);
-                            } else {
-                                // 10. Harvest Starvation
-                                if (isConservative) break;
-                                const { botId, metrics } = calcGlobalMin(newAssignments);
-                                const starvedOps = targetStyle.operations.filter(op => {
-                                    const m = metrics.get(op.id);
-                                    return m && m.effective < m.local * 0.9;
-                                });
-                                if (botId) {
-                                    const targetOp = targetStyle.operations.find(o => o.id === botId);
-                                    if (targetOp && starvedOps.length > 0) {
-                                        for (const sOp of starvedOps) {
-                                            const users = newAssignments.get(sOp.id) || [];
-                                            for (const uid of users) {
-                                                const userObj = operators.find(o => o.id === uid);
-                                                if (
-                                                    userObj &&
-                                                    userObj.skills?.includes(targetOp.machineType) &&
-                                                    !(newAssignments.get(targetOp.id)?.includes(uid)) &&
-                                                    !isDownstreamOverlapRestricted(newAssignments, uid, targetOp.id) &&
-                                                    !isRoleLockRestricted(newAssignments, uid, targetOp.id, metrics, botId)
-                                                ) {
-                                                    const simMap = new Map<string, string[]>();
-                                                    newAssignments.forEach((v, k) => simMap.set(k, [...v]));
-                                                    simMap.set(targetOp.id, [...(simMap.get(targetOp.id) || []), uid]);
-                                                    const { score } = calcGlobalMin(simMap);
-                                                    if (score > bestNewScore) {
-                                                        bestNewScore = score;
-                                                        bestHarvest = { addOpId: targetOp.id, addUser: uid };
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (bestHarvest) {
-                                    const list = newAssignments.get(bestHarvest.addOpId) || [];
-                                    newAssignments.set(bestHarvest.addOpId, [...list, bestHarvest.addUser]);
-                                } else {
-                                    break; // END OF HILL CLIMBING
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Phase 3: Utilization (Assign idle operators to best fit)
-        candidatesPool.forEach(candidate => {
-            if (getLoad(newAssignments, candidate.id) === 0) {
-                const evalResult = calcGlobalMin(newAssignments);
-                const { metrics, botId } = evalResult;
-                const skilledOps = targetStyle.operations
-                    .filter(op => candidate.skills?.includes(op.machineType))
-                    .map(op => {
-                        const currentAssigned = newAssignments.get(op.id)?.length || 0;
-                        const allowedCap = getAllowedFanOutCap(op.id, metrics, botId);
-                        if (currentAssigned >= allowedCap) return null;
-                        if (isDownstreamOverlapRestricted(newAssignments, candidate.id, op.id)) return null;
-                        if (isRoleLockRestricted(newAssignments, candidate.id, op.id, metrics, botId)) return null;
-
-                        const stat = metrics.get(op.id);
-                        const local = stat?.local || 0;
-                        const effective = stat?.effective || 0;
-                        const starvationGap = Math.max(0, local - effective);
-                        const flowRatio = local > 0 ? effective / local : 1;
-
-                        const finalBoost = finalOperationIds.has(op.id) ? 30 : 0;
-                        const starvationBoost = starvationGap * 0.15;
-                        const blockageBoost = (1 - flowRatio) * 12;
-                        const smvBoost = op.smv / 120;
-                        return {
-                            op,
-                            priority: finalBoost + starvationBoost + blockageBoost + smvBoost,
-                        };
-                    })
-                    .filter((item): item is { op: typeof targetStyle.operations[number]; priority: number } => !!item)
-                    .sort((a, b) => b.priority - a.priority)
-                    .map(item => item.op);
-
-                for (const targetOp of skilledOps) {
-                    const currentAssigned = newAssignments.get(targetOp.id)?.length || 0;
-                    const allowedCap = getAllowedFanOutCap(targetOp.id, metrics, botId);
-
-                    if (currentAssigned < allowedCap) {
-                        const list = newAssignments.get(targetOp.id) || [];
-                        newAssignments.set(targetOp.id, [...list, candidate.id]);
-                        break;
-                    }
-                }
-            }
-        });
-
-        // Phase 4: Cleanup
-        const cleanupAssignArr = Array.from(newAssignments.entries()).map(([k, v]) => ({ operationId: k, operatorIds: v }));
-        const cleanupSolved = solveFluidCapacity(
-            targetStyle,
-            cleanupAssignArr,
-            operators,
-            machineCounts,
-            availableMinutes
-        );
-
-        cleanupSolved.forEach((res, opId) => {
-            res.finalWeights.forEach((weight, uid) => {
-                if (weight < 0.15 && (newAssignments.get(opId)?.length || 0) > 1) {
-                    const list = newAssignments.get(opId) || [];
-                    newAssignments.set(opId, list.filter(id => id !== uid));
-                }
-            });
-        });
-
-        // Phase 4b: Soft downstream deconflict.
-        // Avoid assigning one operator to both an operation and its immediate downstream when alternatives exist.
-        let deconflictPass = 0;
-        while (deconflictPass < 8) {
-            deconflictPass++;
-            const baseline = calcGlobalMin(newAssignments);
-            let bestChange: { opId: string; uid: string; nextScore: number } | null = null;
-
-            immediatePairs.forEach(({ upstreamId, downstreamId }) => {
-                const upstreamUsers = newAssignments.get(upstreamId) || [];
-                const downstreamUsers = newAssignments.get(downstreamId) || [];
-                const sharedUsers = upstreamUsers.filter(uid => downstreamUsers.includes(uid));
-                sharedUsers.forEach(uid => {
-                    if (upstreamUsers.length > 1) {
-                        const simMap = cloneAssignMap(newAssignments);
-                        simMap.set(upstreamId, upstreamUsers.filter(id => id !== uid));
-                        const nextScore = calcGlobalMin(simMap).score;
-                        if (!bestChange || nextScore > bestChange.nextScore) {
-                            bestChange = { opId: upstreamId, uid, nextScore };
-                        }
-                    }
-                    if (downstreamUsers.length > 1) {
-                        const simMap = cloneAssignMap(newAssignments);
-                        simMap.set(downstreamId, downstreamUsers.filter(id => id !== uid));
-                        const nextScore = calcGlobalMin(simMap).score;
-                        if (!bestChange || nextScore > bestChange.nextScore) {
-                            bestChange = { opId: downstreamId, uid, nextScore };
-                        }
-                    }
-                });
-            });
-
-            if (bestChange === null) break;
-            const chosenChange: { opId: string; uid: string; nextScore: number } = bestChange;
-            if (chosenChange.nextScore < baseline.score - 0.5) break;
-
-            const updated = (newAssignments.get(chosenChange.opId) || []).filter(id => id !== chosenChange.uid);
-            newAssignments.set(chosenChange.opId, updated);
-        }
-
-        // Phase 5: Lightweight finish-time rebalance.
-        // Shift one capable operator from strong non-final tasks to weakest final task
-        // only when it helps finish earlier and does not increase idle time.
-        const maxFinishRebalanceIterations = isConservative
-            ? 0
-            : Math.max(1, Math.min(4, finalOperations.length * 2));
-        for (let i = 0; i < maxFinishRebalanceIterations; i++) {
-            const currentEval = calcGlobalMin(newAssignments);
-            const currentRuntime = evaluateScheduleOutcome(newAssignments);
-            const weakestFinal = finalOperations.reduce<{ id: string; effective: number } | null>((weakest, op) => {
-                const effective = currentEval.metrics.get(op.id)?.effective || 0;
-                if (!weakest || effective < weakest.effective) {
-                    return { id: op.id, effective };
-                }
-                return weakest;
-            }, null);
-
-            if (!weakestFinal) break;
-
-            const targetOp = targetStyle.operations.find(op => op.id === weakestFinal.id);
-            if (!targetOp) break;
-
-            const currentTargetAssignments = newAssignments.get(targetOp.id) || [];
-            const targetMachineCap = getAllowedFanOutCap(targetOp.id, currentEval.metrics, currentEval.botId);
-            if (currentTargetAssignments.length >= targetMachineCap) break;
-
-            const candidateMoves: Array<{ sourceOpId: string; operatorId: string; scoreGain: number; finalGain: number }> = [];
-
-            newAssignments.forEach((assignedUsers, sourceOpId) => {
-                if (sourceOpId === targetOp.id) return;
-                if (assignedUsers.length <= 1 && !finalOperationIds.has(sourceOpId)) return;
-
-                assignedUsers.forEach(uid => {
-                    if (currentTargetAssignments.includes(uid)) return;
-                    const worker = operatorById.get(uid);
-                    if (!worker?.skills?.includes(targetOp.machineType)) return;
-                    if (isDownstreamOverlapRestricted(newAssignments, uid, targetOp.id)) return;
-                    if (isRoleLockRestricted(newAssignments, uid, targetOp.id, currentEval.metrics, currentEval.botId)) return;
-
-                    const simMap = cloneAssignMap(newAssignments);
-                    simMap.set(sourceOpId, (simMap.get(sourceOpId) || []).filter(id => id !== uid));
-                    simMap.set(targetOp.id, [...(simMap.get(targetOp.id) || []), uid]);
-
-                    const simEval = calcGlobalMin(simMap);
-                    const finalGain = simEval.finalMin - currentEval.finalMin;
-                    const scoreGain = simEval.score - currentEval.score;
-
-                    if (finalGain <= 0.2) return;
-                    if (scoreGain < -5) return;
-                    candidateMoves.push({ sourceOpId, operatorId: uid, scoreGain, finalGain });
-                });
-            });
-
-            if (candidateMoves.length === 0) break;
-
-            const rankedMoves = candidateMoves
-                .sort((a, b) => {
-                    if (b.finalGain !== a.finalGain) return b.finalGain - a.finalGain;
-                    return b.scoreGain - a.scoreGain;
-                })
-                .slice(0, 5);
-
-            let selectedMove: { sourceOpId: string; operatorId: string } | null = null;
-            for (const move of rankedMoves) {
-                const simMap = cloneAssignMap(newAssignments);
-                simMap.set(move.sourceOpId, (simMap.get(move.sourceOpId) || []).filter(id => id !== move.operatorId));
-                simMap.set(targetOp.id, [...(simMap.get(targetOp.id) || []), move.operatorId]);
-
-                const moveRuntime = evaluateScheduleOutcome(simMap);
-                const fasterCompletion = moveRuntime.completionMinute < currentRuntime.completionMinute;
-                const noIdleIncrease = moveRuntime.idleMinutes <= currentRuntime.idleMinutes;
-                if (fasterCompletion && noIdleIncrease) {
-                    selectedMove = { sourceOpId: move.sourceOpId, operatorId: move.operatorId };
-                    break;
-                }
-            }
-
-            if (!selectedMove) break;
-            newAssignments.set(
-                selectedMove.sourceOpId,
-                (newAssignments.get(selectedMove.sourceOpId) || []).filter(id => id !== selectedMove.operatorId)
-            );
-            newAssignments.set(targetOp.id, [...(newAssignments.get(targetOp.id) || []), selectedMove.operatorId]);
-        }
-
-        // Phase 6: Fan-out normalization.
-        // Keep <=2 operators per operation by default, allow 3 only for hard bottlenecks.
-        let normalizePass = 0;
-        while (normalizePass < 10) {
-            normalizePass++;
-            const evalResult = calcGlobalMin(newAssignments);
-            let changed = false;
-
-            targetStyle.operations.forEach(op => {
-                const users = newAssignments.get(op.id) || [];
-                const allowedCap = getAllowedFanOutCap(op.id, evalResult.metrics, evalResult.botId);
-                if (users.length <= allowedCap) return;
-
-                let bestUidToRemove: string | null = null;
-                let bestScore = Number.NEGATIVE_INFINITY;
-
-                users.forEach(uid => {
-                    const simMap = cloneAssignMap(newAssignments);
-                    simMap.set(op.id, users.filter(id => id !== uid));
-                    const score = calcGlobalMin(simMap).score;
-                    if (score > bestScore) {
-                        bestScore = score;
-                        bestUidToRemove = uid;
-                    }
-                });
-
-                if (bestUidToRemove) {
-                    newAssignments.set(op.id, users.filter(id => id !== bestUidToRemove));
-                    changed = true;
-                }
-            });
-
-            if (!changed) break;
-        }
-
-        return Array.from(newAssignments.entries()).map(([opId, ids]) => ({
-            operationId: opId,
-            operatorIds: ids
-        })).filter(a => a.operatorIds.length > 0);
-    };
 
     const buildVariantAssignmentMap = useCallback((
         style: GarmentStyle,
@@ -2152,22 +1454,6 @@ export function ProductionPlanner(): React.ReactNode {
     }, [selectedStyle, selectedNextStyle, simResult.schedule]);
 
 
-    // Calculate actual scheduled completion count per operation from simulation
-    const scheduledCountPerOp = useMemo(() => {
-        const counts: Record<string, number> = {};
-        if (!simResult.schedule) return counts;
-
-        // Sum up all completion events for each operation
-        Object.values(simResult.schedule).forEach(events => {
-            events.forEach(ev => {
-                if (!counts[ev.opId]) counts[ev.opId] = 0;
-                counts[ev.opId] += ev.count;
-            });
-        });
-
-        return counts;
-    }, [simResult.schedule]);
-
     const scheduledCountPerStyleVariantOp = useMemo(() => {
         const counts: Record<string, number> = {};
         if (!simResult.schedule || !simulationInputSet) return counts;
@@ -2178,6 +1464,23 @@ export function ProductionPlanner(): React.ReactNode {
                 const slot = simulationInputSet.styleSlots[styleIndex];
                 if (!slot) return;
                 const key = buildStyleVariantOpKey(slot.source, slot.rootStyleId, slot.variantId, event.opId);
+                counts[key] = (counts[key] || 0) + event.count;
+            });
+        });
+
+        return counts;
+    }, [simResult.schedule, simulationInputSet]);
+
+    const scheduledCountPerRootStyleOp = useMemo(() => {
+        const counts: Record<string, number> = {};
+        if (!simResult.schedule || !simulationInputSet) return counts;
+
+        Object.values(simResult.schedule).forEach(events => {
+            events.forEach(event => {
+                const styleIndex = typeof event.styleIndex === 'number' ? event.styleIndex : 0;
+                const slot = simulationInputSet.styleSlots[styleIndex];
+                if (!slot) return;
+                const key = buildRootStyleOpKey(slot.rootStyleId, event.opId);
                 counts[key] = (counts[key] || 0) + event.count;
             });
         });
@@ -2306,10 +1609,17 @@ export function ProductionPlanner(): React.ReactNode {
         nextStyleAssignments: Assignment[],
         nextStyleVariantAssignments: Record<string, Assignment[]>,
         threadConfigOverride?: ThreadConstraintConfig
-    ) => {
+    ): PlanQuality | null => {
         if (!selectedStyle) return null;
         if (!hasAnyScopedAssignments(primaryAssignments, primaryVariantAssignments)) {
-            return { actualOutput: 0, estimatedWip: 0 };
+            return {
+                actualOutput: 0,
+                primaryOutput: 0,
+                nextOutput: 0,
+                estimatedWip: 0,
+                primaryWip: 0,
+                nextWip: 0,
+            };
         }
 
         const simInput = buildSimulationInputs(
@@ -2342,29 +1652,25 @@ export function ProductionPlanner(): React.ReactNode {
                 const styleIndex = typeof event.styleIndex === 'number' ? event.styleIndex : 0;
                 const slot = simInput.styleSlots[styleIndex];
                 if (!slot) return;
-                const key = `${slot.rootStyleId}::${event.opId}`;
+                const key = buildRootStyleOpKey(slot.rootStyleId, event.opId);
                 countByStyleOp.set(key, (countByStyleOp.get(key) || 0) + event.count);
             });
         });
 
-        const estimateWipForStyle = (style?: GarmentStyle) => {
-            if (!style) return 0;
-            let total = 0;
-            style.operations.forEach(op => {
-                const opKey = `${style.id}::${op.id}`;
-                const outputCount = countByStyleOp.get(opKey) || 0;
-                const successors = style.operations.filter(next => next.dependencies?.includes(op.id));
-                if (successors.length === 0) return;
-                const downstream = Math.min(
-                    ...successors.map(next => countByStyleOp.get(`${style.id}::${next.id}`) || 0)
-                );
-                total += Math.max(0, outputCount - downstream);
-            });
-            return total;
-        };
+        const getCount = (styleId: string, operationId: string) =>
+            countByStyleOp.get(buildRootStyleOpKey(styleId, operationId)) || 0;
 
-        const estimatedWip = estimateWipForStyle(selectedStyle) + estimateWipForStyle(selectedNextStyle);
-        return { actualOutput, estimatedWip };
+        const primaryWip = estimateStyleWip(selectedStyle, getCount);
+        const nextWip = estimateStyleWip(selectedNextStyle, getCount);
+        const estimatedWip = primaryWip + nextWip;
+        return {
+            actualOutput,
+            primaryOutput: output.primary,
+            nextOutput: output.next,
+            estimatedWip,
+            primaryWip,
+            nextWip,
+        };
     }, [
         selectedStyle,
         selectedNextStyle,
@@ -2456,73 +1762,270 @@ export function ProductionPlanner(): React.ReactNode {
         toast
     ]);
 
-    // Actual Auto Assign Handler
-    const handleAutoAssign = useCallback(() => {
+    // AI Line Balancer Handler
+    const handleAILineBalance = useCallback(async () => {
         if (!selectedStyle) return;
+        setIsBalancing(true);
+        setAiReasoning(null);
+        try {
+            const candidatesPool = operators.filter(o => availableOperatorIds.includes(o.id));
+            const previousAiReasoning = aiReasoning;
+            const previousNextStyleDecision = lastNextStyleDecision;
+            const hasExistingPlan = hasAnyScopedAssignments(assignments, variantAssignments);
+            const existingQuality = hasExistingPlan
+                ? evaluatePlanQuality(
+                    assignments,
+                    variantAssignments,
+                    nextAssignments,
+                    nextVariantAssignments
+                )
+                : null;
+            const buildBalancerInput = (style: GarmentStyle, operatorPool: typeof candidatesPool = candidatesPool) => ({
+                style: {
+                    id: style.id,
+                    name: style.name,
+                    quantity: style.quantity || 0,
+                    totalSmv: style.totalSmv || 0,
+                    operations: style.operations.map(op => ({
+                        id: op.id,
+                        name: op.name,
+                        smv: op.smv,
+                        machineType: op.machineType,
+                        dependencies: op.dependencies || []
+                    }))
+                },
+                operators: operatorPool.map(o => ({
+                    id: o.id,
+                    name: o.name,
+                    skills: o.skills || [],
+                    efficiency: o.efficiencyRating || 100,
+                    reworkRate: o.rework || 0
+                })),
+                machineCounts: machineCounts
+            });
 
-        const computedPrimary = computeAssignments(selectedStyle, autoAssignMode, roleLockSoftEnabled);
-        const computedPrimaryVariants = buildVariantAssignmentMap(selectedStyle, computedPrimary, autoAssignMode);
+            const result = await runLineBalancer(buildBalancerInput(selectedStyle));
+            if ('error' in result) {
+                toast({
+                    title: "AI Balancing Failed",
+                    description: result.error,
+                    variant: "destructive"
+                });
+                return;
+            }
 
-        const computedNext = selectedNextStyle
-            ? computeAssignments(selectedNextStyle, autoAssignMode, roleLockSoftEnabled)
-            : [];
-        const computedNextVariants = selectedNextStyle
-            ? buildVariantAssignmentMap(selectedNextStyle, computedNext, autoAssignMode)
-            : {};
+            const computedPrimary: Assignment[] = result.assignments.map(a => ({
+                operationId: a.operationId,
+                operatorIds: a.operatorIds
+            }));
+            const computedPrimaryVariants = buildVariantAssignmentMap(selectedStyle, computedPrimary);
+            let nextBalanceDecision: NextStyleFlowDecision | null = null;
+            let nextBalanceError: string | null = null;
+            let candidateNextAssignments: Assignment[] = [];
+            let candidateNextVariantAssignments: Record<string, Assignment[]> = {};
+            let combinedReasoning = result.reasoning;
 
-        const hasBaselinePlan = hasAnyScopedAssignments(assignments, variantAssignments);
-        if (hasBaselinePlan) {
-            const baseline = evaluatePlanQuality(assignments, variantAssignments, nextAssignments, nextVariantAssignments);
-            const candidate = evaluatePlanQuality(
-                computedPrimary,
-                computedPrimaryVariants,
-                computedNext,
-                computedNextVariants
-            );
+            // Continuous Flow: auto-assign the next style to soak up idle capacity —
+            // but capacity-aware, so it does NOT steal the primary's bottleneck.
+            if (selectedNextStyle) {
+                try {
+                    // 1. Find the primary's binding-constraint operator(s) from a
+                    //    primary-only simulation: the operator(s) on the terminal
+                    //    operation with the lowest finished count. Their "idle" time is
+                    //    constraint buffer, not free capacity, so it must be reserved.
+                    let constraintOperatorIds: string[] = [];
+                    try {
+                        const primarySim = simulateProductionSchedule(
+                            [selectedStyle],
+                            [computedPrimary],
+                            candidatesPool,
+                            machineCounts,
+                            availableMinutes,
+                            switchDelay,
+                            operatorAttendance,
+                            learnedPerformance,
+                            undefined,
+                            threadConstraintConfig
+                        );
+                        const counts: Record<string, number> = {};
+                        Object.values(primarySim.schedule).forEach((segs: any[]) =>
+                            segs.forEach(s => { counts[s.opId] = (counts[s.opId] || 0) + s.count; })
+                        );
+                        const feedsSomething = new Set<string>();
+                        selectedStyle.operations.forEach(op => (op.dependencies || []).forEach(d => feedsSomething.add(d)));
+                        const terminals = selectedStyle.operations.filter(op => !feedsSomething.has(op.id));
+                        let bindingOpId: string | null = null;
+                        let minCount = Infinity;
+                        terminals.forEach(op => {
+                            const c = counts[op.id] || 0;
+                            if (c < minCount) { minCount = c; bindingOpId = op.id; }
+                        });
+                        if (bindingOpId) {
+                            constraintOperatorIds = computedPrimary.find(a => a.operationId === bindingOpId)?.operatorIds || [];
+                        }
+                    } catch (simErr) {
+                        console.error("Primary constraint detection failed:", simErr);
+                    }
 
-            if (baseline && candidate) {
-                if (isPlanRegression(baseline, candidate)) {
-                    toast({
-                        title: 'Auto Assign Guard Applied',
-                        description: `Kept previous plan (output ${baseline.actualOutput} > ${candidate.actualOutput}, WIP ${baseline.estimatedWip} < ${candidate.estimatedWip}).`,
+                    // 2. For the next style, reserve each constraint operator to their
+                    //    UNIQUE skill(s) only. They can still cover a next-style op that
+                    //    nobody else can do (their scarce skill), but they can't be
+                    //    pulled onto shared-skill work that would starve the primary's
+                    //    bottleneck. Everyone else keeps their full skill set.
+                    const skillHolderCount: Record<string, number> = {};
+                    candidatesPool.forEach(o => (o.skills || []).forEach(sk => {
+                        skillHolderCount[sk] = (skillHolderCount[sk] || 0) + 1;
+                    }));
+                    const nextOperatorPool = candidatesPool.map(o => {
+                        if (!constraintOperatorIds.includes(o.id)) return o;
+                        const uniqueSkills = (o.skills || []).filter(sk => skillHolderCount[sk] === 1);
+                        return { ...o, skills: uniqueSkills };
                     });
-                    return;
+
+                    const nextResult = await runLineBalancer(buildBalancerInput(selectedNextStyle, nextOperatorPool));
+                    if ('error' in nextResult) {
+                        nextBalanceError = nextResult.error;
+                    } else {
+                        const computedNext: Assignment[] = nextResult.assignments.map(a => ({
+                            operationId: a.operationId,
+                            operatorIds: a.operatorIds
+                        }));
+                        const primaryOnlyQuality = evaluatePlanQuality(
+                            computedPrimary,
+                            computedPrimaryVariants,
+                            [],
+                            {}
+                        );
+                        const safeNextPlan = primaryOnlyQuality
+                            ? findSafeNextStylePlan(computedNext, candidateAssignments => {
+                                const candidateVariants = buildVariantAssignmentMap(selectedNextStyle, candidateAssignments, 'conservative');
+                                const candidateQuality = evaluatePlanQuality(
+                                    computedPrimary,
+                                    computedPrimaryVariants,
+                                    candidateAssignments,
+                                    candidateVariants
+                                );
+                                if (!candidateQuality) return null;
+                                return {
+                                    quality: candidateQuality,
+                                    decision: assessNextStyleFlow(primaryOnlyQuality, candidateQuality),
+                                };
+                            })
+                            : null;
+
+                        if (safeNextPlan) {
+                            nextBalanceDecision = safeNextPlan.decision;
+                        }
+
+                        if (safeNextPlan && (safeNextPlan.decision.kind === 'continuous' || safeNextPlan.decision.kind === 'prep')) {
+                            const safeNextVariants = buildVariantAssignmentMap(selectedNextStyle, safeNextPlan.assignments, 'conservative');
+                            const prunedText = safeNextPlan.removedUnits > 0
+                                ? ` Pruned ${safeNextPlan.removedUnits} next-style operator assignment${safeNextPlan.removedUnits === 1 ? '' : 's'} that would steal current-style capacity.`
+                                : '';
+                            nextBalanceDecision = {
+                                ...safeNextPlan.decision,
+                                reason: `${safeNextPlan.decision.reason}${prunedText}`,
+                            };
+                            candidateNextAssignments = safeNextPlan.assignments;
+                            candidateNextVariantAssignments = safeNextVariants;
+                        }
+                    }
+                } catch (nextErr) {
+                    console.error("Next-style balancing failed:", nextErr);
+                    nextBalanceError = nextErr instanceof Error ? nextErr.message : "Next-style balancing failed.";
                 }
             }
-        }
 
-        setAssignments(computedPrimary);
-        setVariantAssignments(computedPrimaryVariants);
-        if (selectedNextStyle) {
-            setNextAssignments(computedNext);
-            setNextVariantAssignments(computedNextVariants);
+            if (selectedNextStyle) {
+                if (nextBalanceDecision) {
+                    combinedReasoning = `${combinedReasoning}\n\nNext style: ${nextBalanceDecision.reason}`;
+                } else if (nextBalanceError) {
+                    combinedReasoning = `${combinedReasoning}\n\nNext style skipped: ${nextBalanceError}`;
+                }
+            }
+
+            const candidateQuality = evaluatePlanQuality(
+                computedPrimary,
+                computedPrimaryVariants,
+                candidateNextAssignments,
+                candidateNextVariantAssignments
+            );
+            const rebalanceGuard = candidateQuality
+                ? assessRebalanceCandidate(existingQuality, candidateQuality)
+                : {
+                    action: 'keep-existing' as const,
+                    reason: 'Kept existing balance because the new run could not be simulated.',
+                    primaryOutputDelta: 0,
+                    nextOutputDelta: 0,
+                    actualOutputDelta: 0,
+                    wipDelta: 0,
+                };
+
+            if (rebalanceGuard.action === 'keep-existing') {
+                setLastNextStyleDecision(previousNextStyleDecision);
+                setAiReasoning(previousAiReasoning
+                    ? `${previousAiReasoning}\n\nAI rebalance guard: ${rebalanceGuard.reason}`
+                    : `AI rebalance guard: ${rebalanceGuard.reason}`
+                );
+                toast({
+                    title: 'Existing Balance Kept',
+                    description: rebalanceGuard.reason,
+                });
+                return;
+            }
+
+            setAssignments(computedPrimary);
+            setVariantAssignments(computedPrimaryVariants);
+            setNextAssignments(candidateNextAssignments);
+            setNextVariantAssignments(candidateNextVariantAssignments);
+            setLastNextStyleDecision(selectedNextStyle ? nextBalanceDecision : null);
+            setAiReasoning(`${combinedReasoning}\n\nAI rebalance guard: ${rebalanceGuard.reason}`);
+
+            const toastTitle = !selectedNextStyle
+                ? "Line Balanced by AI"
+                : nextBalanceDecision?.kind === 'continuous'
+                    ? "Both Styles Balanced by AI"
+                    : nextBalanceDecision?.kind === 'prep'
+                        ? "Current Style Balanced; Next Style Prep Scheduled"
+                        : "Current Style Balanced; Next Style Held";
+            const toastDescription = !selectedNextStyle
+                ? "The line has been successfully optimized for maximum output."
+                : nextBalanceDecision?.reason || nextBalanceError || "Next style was not assigned because no safe idle-capacity plan was found.";
+            toast({
+                title: toastTitle,
+                description: toastDescription,
+            });
+        } catch (error: any) {
+            toast({
+                title: "AI Balancing Failed",
+                description: error.message || "Failed to optimize line using AI. Please try again.",
+                variant: "destructive"
+            });
+        } finally {
+            setIsBalancing(false);
         }
     }, [
         selectedStyle,
         selectedNextStyle,
-        autoAssignMode,
-        roleLockSoftEnabled,
+        operators,
+        availableOperatorIds,
+        aiReasoning,
+        lastNextStyleDecision,
         assignments,
         variantAssignments,
         nextAssignments,
         nextVariantAssignments,
+        machineCounts,
+        availableMinutes,
+        switchDelay,
+        operatorAttendance,
+        learnedPerformance,
+        threadConstraintConfig,
+        hasAnyScopedAssignments,
         buildVariantAssignmentMap,
         evaluatePlanQuality,
-        hasAnyScopedAssignments,
-        isPlanRegression,
         toast
     ]);
-
-    useEffect(() => {
-        if (!enableRollingReplan || !selectedStyle) return;
-        const intervalMinutes = clamp(replanIntervalMinutes, 30, 180);
-        const timer = window.setInterval(() => {
-            handleAutoAssign();
-            setLastReplanAt(new Date());
-        }, intervalMinutes * 60 * 1000);
-
-        return () => window.clearInterval(timer);
-    }, [enableRollingReplan, replanIntervalMinutes, handleAutoAssign, selectedStyle?.id, selectedNextStyle?.id]);
 
     const planningKpis = useMemo(() => {
         if (!selectedStyle || !simResult.schedule) {
@@ -2568,19 +2071,11 @@ export function ProductionPlanner(): React.ReactNode {
             ? (productiveMachineMinutes / totalMachineCapacity) * 100
             : 0;
 
-        const estimateWipForStyle = (style?: GarmentStyle) => {
-            if (!style) return 0;
-            let total = 0;
-            style.operations.forEach(op => {
-                const output = scheduledCountPerOp[op.id] || 0;
-                const successors = style.operations.filter(next => next.dependencies?.includes(op.id));
-                if (successors.length === 0) return;
-                const downstream = Math.min(...successors.map(next => scheduledCountPerOp[next.id] || 0));
-                total += Math.max(0, output - downstream);
-            });
-            return total;
-        };
-        const estimatedWip = estimateWipForStyle(selectedStyle) + estimateWipForStyle(selectedNextStyle);
+        const getCount = (styleId: string, operationId: string) =>
+            scheduledCountPerRootStyleOp[buildRootStyleOpKey(styleId, operationId)] || 0;
+        const estimatedWip =
+            estimateStyleWip(selectedStyle, getCount) +
+            estimateStyleWip(selectedNextStyle, getCount);
 
         const [shiftHour, shiftMinute] = shiftStartTime.split(':').map(Number);
         const shiftStart = Number.isFinite(shiftHour) && Number.isFinite(shiftMinute)
@@ -2618,24 +2113,90 @@ export function ProductionPlanner(): React.ReactNode {
         bottleneckOutput.next,
         availableMinutes,
         machineCounts,
-        scheduledCountPerOp,
+        scheduledCountPerRootStyleOp,
         todayProductionLogs,
         shiftStartTime,
     ]);
 
+    const nextStyleWip = useMemo(() => {
+        const getCount = (styleId: string, operationId: string) =>
+            scheduledCountPerRootStyleOp[buildRootStyleOpKey(styleId, operationId)] || 0;
+        return estimateStyleWip(selectedNextStyle, getCount);
+    }, [selectedNextStyle, scheduledCountPerRootStyleOp]);
+
+    const hasActiveNextAssignments = useMemo(
+        () => hasAnyScopedAssignments(nextAssignments, nextVariantAssignments),
+        [nextAssignments, nextVariantAssignments, hasAnyScopedAssignments]
+    );
+
+    const nextStyleFlowStatus = useMemo(() => {
+        if (!selectedNextStyle) return null;
+        if (!hasActiveNextAssignments) {
+            if (lastNextStyleDecision?.kind === 'blocked') {
+                return {
+                    kind: 'blocked' as const,
+                    badge: 'Held',
+                    title: 'Next style held',
+                    description: lastNextStyleDecision.reason,
+                };
+            }
+            return null;
+        }
+
+        if (bottleneckOutput.next > 0) {
+            return {
+                kind: 'continuous' as const,
+                badge: 'Continuous Flow',
+                title: 'Next style is flowing',
+                description: `${bottleneckOutput.next} finished next-style pcs are scheduled after protecting the current style.`,
+            };
+        }
+
+        if (nextStyleWip > 0) {
+            return {
+                kind: 'prep' as const,
+                badge: 'Prep WIP',
+                title: 'Next style is prep only',
+                description: `${Math.round(nextStyleWip)} pcs are staged for the next style, but no finished next-style output is scheduled yet.`,
+            };
+        }
+
+        return {
+            kind: 'blocked' as const,
+            badge: 'No Flow',
+            title: 'Next style is not feasible yet',
+            description: 'The current plan has next-style assignments, but the simulator did not schedule usable next-style work.',
+        };
+    }, [
+        selectedNextStyle,
+        hasActiveNextAssignments,
+        lastNextStyleDecision,
+        bottleneckOutput.next,
+        nextStyleWip,
+    ]);
+
     const theoreticalCapacityPotential = useMemo(() => {
-        const totalSmv = (selectedStyle?.totalSmv || 0) + (selectedNextStyle?.totalSmv || 0);
-        const avgSmv = totalSmv / (selectedNextStyle ? 2 : 1);
+        const includesNextStyle = hasActiveNextAssignments && !!selectedNextStyle;
+        const totalSmv = (selectedStyle?.totalSmv || 0) + (includesNextStyle ? (selectedNextStyle?.totalSmv || 0) : 0);
+        const avgSmv = totalSmv / (includesNextStyle ? 2 : 1);
         const count = availableOperatorIds.length || 0;
         if (!avgSmv || !count) return 0;
         return Math.floor((availableMinutes * count * 0.85) / avgSmv);
-    }, [selectedStyle?.totalSmv, selectedNextStyle?.totalSmv, selectedNextStyle?.id, availableOperatorIds.length, availableMinutes]);
+    }, [
+        selectedStyle?.totalSmv,
+        selectedNextStyle?.totalSmv,
+        selectedNextStyle?.id,
+        hasActiveNextAssignments,
+        availableOperatorIds.length,
+        availableMinutes
+    ]);
 
     const orderBoundedPotential = useMemo(() => {
-        const remainingOrders = selectedNextStyle
+        const includesNextStyle = hasActiveNextAssignments && !!selectedNextStyle;
+        const remainingOrders = includesNextStyle
             ? remainingPrimaryQty + remainingNextQty
             : remainingPrimaryQty;
-        const hasOrderBound = (selectedStyle?.quantity || 0) > 0 || (selectedNextStyle?.quantity || 0) > 0;
+        const hasOrderBound = (selectedStyle?.quantity || 0) > 0 || (includesNextStyle && (selectedNextStyle?.quantity || 0) > 0);
         if (!hasOrderBound) return theoreticalCapacityPotential;
         if (remainingOrders <= 0) return 0;
         return Math.min(theoreticalCapacityPotential, remainingOrders);
@@ -2643,6 +2204,7 @@ export function ProductionPlanner(): React.ReactNode {
         selectedStyle?.quantity,
         selectedNextStyle?.id,
         selectedNextStyle?.quantity,
+        hasActiveNextAssignments,
         remainingPrimaryQty,
         remainingNextQty,
         theoreticalCapacityPotential
@@ -2954,49 +2516,7 @@ export function ProductionPlanner(): React.ReactNode {
                         </div>
                         </div>
 
-                        <div className="rounded-md border bg-muted/30 p-3">
-                            <div className="flex flex-col md:flex-row md:items-end gap-3">
-                                <div className="space-y-1">
-                                    <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Rolling Re-Plan</div>
-                                    <div className="text-sm text-muted-foreground">
-                                        Recompute assignments from live logs every {clamp(replanIntervalMinutes, 30, 180)} minutes.
-                                    </div>
-                                </div>
-                                <div className="flex items-center gap-2 md:ml-auto">
-                                    <Button
-                                        variant={enableRollingReplan ? "default" : "outline"}
-                                        onClick={() => setEnableRollingReplan(prev => !prev)}
-                                    >
-                                        {enableRollingReplan ? 'Enabled' : 'Disabled'}
-                                    </Button>
-                                    <Input
-                                        type="number"
-                                        className="w-24"
-                                        min={30}
-                                        max={180}
-                                        step={15}
-                                        value={replanIntervalMinutes}
-                                        onChange={(e) => setReplanIntervalMinutes(Number(e.target.value) || 60)}
-                                    />
-                                    <Button
-                                        variant="outline"
-                                        onClick={() => {
-                                            handleAutoAssign();
-                                            setLastReplanAt(new Date());
-                                        }}
-                                        disabled={!selectedStyle}
-                                    >
-                                        Re-plan Now
-                                    </Button>
-                                </div>
-                            </div>
-                            {lastReplanAt && (
-                                <div className="text-xs text-muted-foreground mt-2 md:mt-1">
-                                    Last: {format(lastReplanAt, 'HH:mm')}
-                                </div>
-                            )}
                         </div>
-                    </div>
 
                     <div className="rounded-md border bg-muted/20 p-3 space-y-3">
                         <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Forecast Snapshot</div>
@@ -3074,6 +2594,26 @@ export function ProductionPlanner(): React.ReactNode {
                             <div className="text-lg font-semibold">{planningKpis.scheduleAdherence.toFixed(0)}%</div>
                         </div>
                     </div>
+
+                    {nextStyleFlowStatus && (
+                        <div className={`p-3 border rounded-md ${
+                            nextStyleFlowStatus.kind === 'continuous'
+                                ? 'bg-emerald-50/60 border-emerald-200 dark:bg-emerald-950/10 dark:border-emerald-900/60'
+                                : nextStyleFlowStatus.kind === 'prep'
+                                    ? 'bg-amber-50/70 border-amber-200 dark:bg-amber-950/10 dark:border-amber-900/60'
+                                    : 'bg-destructive/5 border-destructive/20'
+                        }`}>
+                            <div className="flex flex-wrap items-center gap-2">
+                                <Badge variant={nextStyleFlowStatus.kind === 'blocked' ? 'destructive' : 'outline'}>
+                                    {nextStyleFlowStatus.badge}
+                                </Badge>
+                                <span className="text-sm font-medium">{nextStyleFlowStatus.title}</span>
+                            </div>
+                            <p className="mt-1 text-xs text-muted-foreground">
+                                {nextStyleFlowStatus.description}
+                            </p>
+                        </div>
+                    )}
 
                     {confidenceBand && (
                         <div className="p-3 border rounded-md bg-muted/20">
@@ -3222,7 +2762,7 @@ export function ProductionPlanner(): React.ReactNode {
                                                 const getEndTime = () => {
                                                     const [h, m] = shiftStartTime.split(':').map(Number);
                                                     const startMins = (h * 60) + m;
-                                                    const BREAK_MINUTES = 60; // 2x15m Tea + 30m Lunch
+                                                    const BREAK_MINUTES = breaks.reduce((sum, b) => sum + b.duration, 0);
                                                     const standardEnd = startMins + availableMinutes + BREAK_MINUTES;
                                                     const actualEnd = standardEnd + att.shiftExtension;
 
@@ -3235,7 +2775,7 @@ export function ProductionPlanner(): React.ReactNode {
                                                 const updateEndTime = (timeStr: string) => {
                                                     const [globalH, globalM] = shiftStartTime.split(':').map(Number);
                                                     const startMins = (globalH * 60) + globalM;
-                                                    const BREAK_MINUTES = 60; // 2x15m Tea + 30m Lunch
+                                                    const BREAK_MINUTES = breaks.reduce((sum, b) => sum + b.duration, 0);
                                                     const standardEnd = startMins + availableMinutes + BREAK_MINUTES;
 
                                                     const [inH, inM] = timeStr.split(':').map(Number);
@@ -3290,36 +2830,132 @@ export function ProductionPlanner(): React.ReactNode {
                                 </PopoverContent>
                             </Popover>
 
-                            <div className="space-y-1 min-w-[240px]">
-                                <label className="block text-sm font-medium">Assignment Strategy</label>
-                                <Select
-                                    value={autoAssignMode}
-                                    onValueChange={(value: AutoAssignMode) => setAutoAssignMode(value)}
-                                >
-                                    <SelectTrigger>
-                                        <SelectValue />
-                                    </SelectTrigger>
-                                    <SelectContent>
-                                        <SelectItem value="balanced">Balanced (Current)</SelectItem>
-                                        <SelectItem value="conservative">Conservative (Stability)</SelectItem>
-                                    </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="space-y-1">
-                                <label className="block text-sm font-medium">Role Lock (Soft)</label>
-                                <Button
-                                    type="button"
-                                    className="w-full lg:w-auto"
-                                    variant={roleLockSoftEnabled ? 'default' : 'outline'}
-                                    onClick={() => setRoleLockSoftEnabled(prev => !prev)}
-                                >
-                                    {roleLockSoftEnabled ? 'Enabled' : 'Disabled'}
-                                </Button>
-                            </div>
+                            <Popover>
+                                <PopoverTrigger asChild>
+                                    <Button variant="outline" className="border-dashed w-full lg:w-auto justify-start">
+                                        <Coffee className="mr-2 h-4 w-4" />
+                                        Manage Breaks
+                                        {breaks.length > 0 && (
+                                            <Badge variant="secondary" className="ml-2">
+                                                {breaks.length}
+                                            </Badge>
+                                        )}
+                                    </Button>
+                                </PopoverTrigger>
+                                <PopoverContent className="w-96 p-4" align="start">
+                                    <div className="space-y-3">
+                                        <div className="flex items-center justify-between">
+                                            <h4 className="font-medium leading-none">Break Schedule</h4>
+                                            <Button
+                                                variant="ghost"
+                                                size="sm"
+                                                className="h-7 px-2 text-xs text-muted-foreground"
+                                                onClick={() => setBreaks(cloneDefaultBreaks())}
+                                            >
+                                                Reset
+                                            </Button>
+                                        </div>
+                                        <p className="text-xs text-muted-foreground">
+                                            Tea/lunch breaks pause the line. Times are relative to the shift
+                                            start ({shiftStartTime}). Total: {breaks.reduce((s, b) => s + b.duration, 0)}m.
+                                        </p>
 
-                            <Button className="w-full lg:w-auto" onClick={handleAutoAssign} disabled={!selectedStyle}>
-                                <Wand2 className="mr-2 h-4 w-4" />
-                                Auto Assign
+                                        <div className="grid grid-cols-[1fr,70px,56px,28px] gap-2 text-[10px] font-medium text-muted-foreground">
+                                            <span>Name</span>
+                                            <span className="text-center">Start</span>
+                                            <span className="text-center">Mins</span>
+                                            <span />
+                                        </div>
+
+                                        <div className="grid gap-2 max-h-[260px] overflow-y-auto pr-1">
+                                            {[...breaks].sort((a, b) => a.start - b.start).map(brk => {
+                                                const [sh, sm] = shiftStartTime.split(':').map(Number);
+                                                const startBase = (sh * 60) + sm;
+                                                const clockMins = startBase + brk.start;
+                                                const clockStr = `${String(Math.floor(clockMins / 60) % 24).padStart(2, '0')}:${String(clockMins % 60).padStart(2, '0')}`;
+
+                                                const updateBreak = (patch: Partial<BreakConfig>) =>
+                                                    setBreaks(prev => prev.map(b => b.id === brk.id ? { ...b, ...patch } : b));
+
+                                                return (
+                                                    <div key={brk.id} className="grid grid-cols-[1fr,70px,56px,28px] gap-2 items-center">
+                                                        <Input
+                                                            className="h-7 text-xs"
+                                                            value={brk.name}
+                                                            onChange={(e) => updateBreak({ name: e.target.value })}
+                                                        />
+                                                        <Input
+                                                            type="time"
+                                                            className="h-7 p-1 text-center text-[10px]"
+                                                            value={clockStr}
+                                                            onChange={(e) => {
+                                                                const [ih, im] = e.target.value.split(':').map(Number);
+                                                                if (Number.isNaN(ih) || Number.isNaN(im)) return;
+                                                                updateBreak({ start: Math.max(0, ((ih * 60) + im) - startBase) });
+                                                            }}
+                                                        />
+                                                        <Input
+                                                            type="number"
+                                                            min={1}
+                                                            className="h-7 p-1 text-center text-[10px]"
+                                                            value={brk.duration}
+                                                            onChange={(e) => updateBreak({ duration: Math.max(1, parseInt(e.target.value) || 1) })}
+                                                        />
+                                                        <Button
+                                                            variant="ghost"
+                                                            size="icon"
+                                                            className="h-7 w-7 text-muted-foreground hover:text-red-500"
+                                                            onClick={() => setBreaks(prev => prev.filter(b => b.id !== brk.id))}
+                                                        >
+                                                            <Trash2 className="h-3.5 w-3.5" />
+                                                        </Button>
+                                                    </div>
+                                                );
+                                            })}
+                                            {breaks.length === 0 && (
+                                                <p className="text-xs text-muted-foreground italic py-2 text-center">
+                                                    No breaks — the line runs straight through the shift.
+                                                </p>
+                                            )}
+                                        </div>
+
+                                        <Button
+                                            variant="outline"
+                                            size="sm"
+                                            className="w-full"
+                                            onClick={() => {
+                                                const lastStart = breaks.reduce((max, b) => Math.max(max, b.start), 0);
+                                                setBreaks(prev => [...prev, {
+                                                    id: `brk-${Date.now()}`,
+                                                    name: 'Break',
+                                                    start: lastStart + 120,
+                                                    duration: 15,
+                                                }]);
+                                            }}
+                                        >
+                                            <Plus className="mr-2 h-3.5 w-3.5" />
+                                            Add Break
+                                        </Button>
+                                    </div>
+                                </PopoverContent>
+                            </Popover>
+
+                            <Button
+                                className="w-full lg:w-auto bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white hover:from-indigo-600 hover:to-pink-600 border-none shadow-md shadow-purple-500/20"
+                                onClick={handleAILineBalance}
+                                disabled={!selectedStyle || isBalancing}
+                            >
+                                {isBalancing ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        AI Balancing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Sparkles className="mr-2 h-4 w-4" />
+                                        AI Balance Line
+                                    </>
+                                )}
                             </Button>
                         </div>
                     </div>
@@ -3418,7 +3054,19 @@ export function ProductionPlanner(): React.ReactNode {
 
                 {[
                     { title: `Current Style: ${selectedStyle?.name}`, style: selectedStyle, metrics: flowMetrics },
-                    { title: `Next Style: ${selectedNextStyle?.name} (Continuous Flow)`, style: selectedNextStyle, metrics: nextFlowMetrics }
+                    {
+                        title: `Next Style: ${selectedNextStyle?.name} (${
+                            nextStyleFlowStatus?.kind === 'prep'
+                                ? 'Prep WIP'
+                                : nextStyleFlowStatus?.kind === 'blocked'
+                                    ? 'Held'
+                                    : hasActiveNextAssignments
+                                        ? 'Continuous Flow'
+                                        : 'Not Scheduled'
+                        })`,
+                        style: selectedNextStyle,
+                        metrics: nextFlowMetrics
+                    }
                 ].map(({ title, style, metrics }, i) => {
                     if (!style) return null;
                     return (
@@ -3497,7 +3145,11 @@ export function ProductionPlanner(): React.ReactNode {
                                                         buildStyleVariantOpKey(styleScope, style.id, variant.variantId, op.id)
                                                         ] || 0
                                                     )
-                                                    : Math.floor(scheduledCountPerOp[op.id] || 0);
+                                                    : Math.floor(
+                                                        scheduledCountPerRootStyleOp[
+                                                        buildRootStyleOpKey(style.id, op.id)
+                                                        ] || 0
+                                                    );
 
                                                 return {
                                                     ...variant,
@@ -3684,6 +3336,23 @@ export function ProductionPlanner(): React.ReactNode {
                     );
                 })}
 
+                {/* AI Balancing Reasoning Panel */}
+                {selectedStyle && aiReasoning && (
+                    <Card className="mt-6 border-indigo-200 dark:border-indigo-800 bg-indigo-50/10 dark:bg-indigo-950/10 shadow-sm">
+                        <CardHeader className="pb-2">
+                            <CardTitle className="flex items-center gap-2 text-base font-semibold text-indigo-700 dark:text-indigo-400">
+                                <Brain className="h-5 w-5 text-indigo-500" />
+                                AI Balance Reasoning & Strategy
+                            </CardTitle>
+                        </CardHeader>
+                        <CardContent className="pb-4">
+                            <div className="text-xs md:text-sm text-foreground/90 whitespace-pre-line leading-relaxed">
+                                {aiReasoning}
+                            </div>
+                        </CardContent>
+                    </Card>
+                )}
+
                 {/* Visual Timeline */}
                 {selectedStyle && allPlannerAssignments.length > 0 && (
                     <>
@@ -3752,6 +3421,25 @@ export function ProductionPlanner(): React.ReactNode {
                             )}
                             isOrderComplete={isPlannedOrderComplete}
                             switchDelay={switchDelay}
+                            shiftStartTime={shiftStartTime}
+                            breaks={breaks}
+                        />
+
+                        <OperatorJobCards
+                            assignedOperators={
+                                unique(allPlannerAssignments.flatMap(a => a.operatorIds))
+                                    .map(id => operators.find(o => o.id === id)!)
+                                    .filter(Boolean)
+                            }
+                            assignments={allPlannerAssignments}
+                            selectedStyle={selectedStyle}
+                            selectedNextStyle={selectedNextStyle}
+                            schedule={simResult.schedule}
+                            availableMinutes={availableMinutes + (
+                                Object.values(operatorAttendance).reduce((max, curr) => Math.max(max, curr.shiftExtension || 0), 0)
+                            )}
+                            shiftStartTime={shiftStartTime}
+                            breaks={breaks}
                         />
                     </>
                 )}

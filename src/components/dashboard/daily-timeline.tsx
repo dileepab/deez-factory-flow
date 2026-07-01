@@ -1,11 +1,19 @@
 import { useState } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
-import type { GarmentStyle, Operator, ProductionEntry } from '@/lib/types';
+import type { GarmentStyle, Operator, ProductionEntry, BreakConfig } from '@/lib/types';
 import { format } from "date-fns";
 import { QuickLogModal } from "./quick-log-modal";
 import { useAuth } from "@/auth-provider";
 import { Plus, Check } from "lucide-react";
+import {
+    cloneDefaultBreaks,
+    computeWorkBreakPoints,
+    getActiveBreaks,
+    mapWorkToWall,
+    parseShiftStartMinutes,
+    splitSegmentAtBreaks,
+} from "@/lib/shift-schedule";
 
 interface Assignment {
     operationId: string;
@@ -35,9 +43,11 @@ interface DailyTimelineProps {
     productionLogs?: ProductionEntry[]; // Optional logs
     isOrderComplete?: boolean;
     switchDelay?: number;
+    shiftStartTime?: string; // "HH:MM" — drives wall-clock labels
+    breaks?: BreakConfig[]; // Configurable tea/lunch breaks
 }
 
-export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule, productionLogs = [], isOrderComplete = false, switchDelay = 0 }: DailyTimelineProps) {
+export function DailyTimeline({ assignedOperators, assignments, selectedStyle, selectedNextStyle, flowMetrics, availableMinutes, schedule, productionLogs = [], isOrderComplete = false, switchDelay = 0, shiftStartTime = "07:30", breaks }: DailyTimelineProps) {
     const { user } = useAuth();
     // State for Mobile Tooltips
     const [openTooltipId, setOpenTooltipId] = useState<string | null>(null);
@@ -186,74 +196,43 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
         return `From ${fromLabel}: split handoff -> ${targets.join(' | ')}.`;
     };
 
-    // SHIFT CONFIGURATION
-    const SHIFT_START_HOUR = 7.5; // 7:30 AM
-    // Dynamic Shift Duration: Base 540 (9h) but expand if availableMinutes (work time) + Breaks > 540
-    // Standard: 480 work + 60 break = 540.
-    // OT: 480 + 120 OT = 600 work. Total = 600 + 60 break = 660.
-    const BREAK_DURATION = 60;
-    const TOTAL_SHIFT_MINUTES = Math.max(540, availableMinutes + BREAK_DURATION);
+    // SHIFT CONFIGURATION (driven by the configured shift start + break schedule)
+    const SHIFT_START_MINUTES = parseShiftStartMinutes(shiftStartTime);
 
-    const BREAKS = [
-        { name: "Tea", start: 165, end: 180 }, // 10:15 - 10:30 (165m from 7:30)
-        { name: "Lunch", start: 330, end: 360 }, // 1:00 - 1:30 (330m from 7:30)
-        { name: "Tea", start: 465, end: 480 }  // 3:15 - 3:30 (465m from 7:30)
-    ];
+    // Only the breaks that actually fall inside today's working span (handles
+    // short shifts and OT). `availableMinutes` is productive (work) minutes.
+    const activeBreaks = getActiveBreaks(
+        (breaks && breaks.length > 0) ? breaks : cloneDefaultBreaks(),
+        availableMinutes,
+    );
+    const workBreakPoints = computeWorkBreakPoints(activeBreaks);
+    const totalBreakMinutes = activeBreaks.reduce((sum, b) => sum + b.duration, 0);
+
+    // Wall-clock breaks (start/end measured from shift start, with prior breaks
+    // already factored into their stored start times).
+    const BREAKS = activeBreaks.map(b => ({ name: b.name, start: b.start, end: b.start + b.duration }));
+
+    // Total wall-clock span = productive work + every active break.
+    const TOTAL_SHIFT_MINUTES = Math.max(60, availableMinutes + totalBreakMinutes);
 
     // Helper: Map Working Minutes to Wall Minutes (Start limit)
-    const mapWorkStart = (workMin: number) => {
-        if (workMin < 165) return workMin;
-        if (workMin < 315) return workMin + 15; // + Tea 1
-        if (workMin < 420) return workMin + 45; // + Tea 1 + Lunch
-        return workMin + 60; // + All
-    };
+    const mapWorkStart = (workMin: number) => mapWorkToWall(workMin, workBreakPoints, 'start');
 
     // Helper: Map Working Minutes to Wall Minutes (End limit)
-    const mapWorkEnd = (workMin: number) => {
-        if (workMin <= 165) return workMin;
-        if (workMin <= 315) return workMin + 15;
-        if (workMin <= 420) return workMin + 45;
-        return workMin + 60;
-    };
+    const mapWorkEnd = (workMin: number) => mapWorkToWall(workMin, workBreakPoints, 'end');
 
     // Helper: Format minutes to H:MM format
     const formatTime = (minutes: number) => {
-        const totalMinutes = (SHIFT_START_HOUR * 60) + minutes;
+        const totalMinutes = SHIFT_START_MINUTES + minutes;
         const h = Math.floor(totalMinutes / 60);
         const m = Math.floor(totalMinutes % 60);
         const ampm = h >= 12 ? 'PM' : 'AM';
-        const displayH = h > 12 ? h - 12 : h;
+        const displayH = h > 12 ? h - 12 : (h === 0 ? 12 : h);
         return `${displayH}:${m.toString().padStart(2, '0')} ${ampm}`;
     };
 
-    // Helper: Split a segment if it crosses a break point
-    const splitSegment = (start: number, end: number) => {
-        // Work minutes where breaks occur:
-        // 10:15 = 165
-        // 1:00 = 315 (after 15m break removed from 330)
-        // 3:15 = 420 (after 45m breaks removed from 465)
-        const breakPoints = [165, 315, 420];
-
-        // Ensure inputs are numbers
-        const s = Number(start);
-        const e = Number(end);
-
-        let parts: { start: number, end: number }[] = [];
-        let current = s;
-
-        for (const bp of breakPoints) {
-            // Strictly less than BP means it belongs to previous block
-            if (current < bp && e > bp) {
-                parts.push({ start: current, end: bp });
-                current = bp;
-            }
-        }
-
-        if (current < e) {
-            parts.push({ start: current, end: e });
-        }
-        return parts;
-    };
+    // Helper: Split a segment if it crosses a break point (work-minute space)
+    const splitSegment = (start: number, end: number) => splitSegmentAtBreaks(start, end, workBreakPoints);
 
     const canMergeEvents = (current: ScheduleEvent, next: ScheduleEvent) => {
         if (next.opId !== current.opId) return false;
@@ -264,7 +243,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
     };
 
     // State for View Mode and Quick Log
-    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('horizontal');
+    const [viewMode, setViewMode] = useState<'horizontal' | 'vertical'>('vertical');
     const [quickLogOpen, setQuickLogOpen] = useState(false);
     const [selectedLogSegment, setSelectedLogSegment] = useState<any>(null);
     const [selectedLogOpId, setSelectedLogOpId] = useState<string>("");
@@ -280,7 +259,7 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
 
                 <div className="space-y-8">
                     {segments.map((seg, i) => {
-                        if (seg.isGap || seg.name === 'Tea' || seg.name === 'Lunch') {
+                        if (seg.type === 'break' || seg.isGap || seg.name === 'Tea' || seg.name === 'Lunch') {
                             // Centered Pill Badge for Breaks
                             return (
                                 <div key={i} className="relative flex items-center justify-center py-2 z-10">
@@ -565,20 +544,28 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                 <div className="flex flex-col md:flex-row w-full mb-2 relative z-10">
                                     <div className="hidden md:block w-[120px] pr-4 shrink-0" />
                                     <div className="flex-1 relative h-6 text-xs text-muted-foreground border-b border-gray-200">
-                                        <div className="absolute top-0 h-full border-l pl-1 border-gray-300" style={{ left: '0%' }}>7:30</div>
-                                        {Array.from({ length: Math.ceil(TOTAL_SHIFT_MINUTES / 60) }).map((_, i) => {
-                                            const tickTime = 30 + (i * 60);
-                                            if (tickTime >= TOTAL_SHIFT_MINUTES) return null;
-                                            return (
-                                                <div
-                                                    key={i}
-                                                    className="absolute top-0 h-full border-l pl-1 border-gray-300"
-                                                    style={{ left: `${(tickTime / TOTAL_SHIFT_MINUTES) * 100}%` }}
-                                                >
-                                                    {Math.floor(SHIFT_START_HOUR + (tickTime / 60) + (Math.floor(SHIFT_START_HOUR + (tickTime / 60)) >= 13 ? -12 : 0))}
-                                                </div>
-                                            )
-                                        })}
+                                        <div className="absolute top-0 h-full border-l pl-1 border-gray-300" style={{ left: '0%' }}>{formatTime(0)}</div>
+                                        {(() => {
+                                            // First round hour after shift start, then every 60 min.
+                                            const firstTick = (60 - (SHIFT_START_MINUTES % 60)) % 60;
+                                            const ticks: number[] = [];
+                                            for (let tickTime = firstTick; tickTime < TOTAL_SHIFT_MINUTES; tickTime += 60) {
+                                                if (tickTime > 0) ticks.push(tickTime);
+                                            }
+                                            return ticks.map(tickTime => {
+                                                const hour24 = Math.floor((SHIFT_START_MINUTES + tickTime) / 60) % 24;
+                                                const hour12 = hour24 % 12 === 0 ? 12 : hour24 % 12;
+                                                return (
+                                                    <div
+                                                        key={tickTime}
+                                                        className="absolute top-0 h-full border-l pl-1 border-gray-300"
+                                                        style={{ left: `${(tickTime / TOTAL_SHIFT_MINUTES) * 100}%` }}
+                                                    >
+                                                        {hour12}
+                                                    </div>
+                                                );
+                                            });
+                                        })()}
                                         <div className="absolute top-0 h-full border-l pl-1 border-gray-300" style={{ left: '100%' }}>
                                             {formatTime(TOTAL_SHIFT_MINUTES)}
                                         </div>
@@ -687,11 +674,11 @@ export function DailyTimeline({ assignedOperators, assignments, selectedStyle, s
                                         }
 
                                         BREAKS.forEach(b => {
-                                            segments.push({ color: '#cbd5e1', name: b.name, count: 1, start: b.start, end: b.end, isGap: false });
+                                            segments.push({ color: '#cbd5e1', name: b.name, count: 0, start: b.start, end: b.end, isGap: false });
                                         });
                                     }
 
-                                    const totalPcs = Math.floor(segments.filter(s => s.name !== 'Tea' && s.name !== 'Lunch').reduce((acc, s) => acc + (s.count || 0), 0));
+                                    const totalPcs = Math.floor(segments.reduce((acc, s) => acc + (s.count || 0), 0));
 
                                     return (
                                         <div key={user.id} className="flex flex-col md:flex-row md:items-center group mb-4">

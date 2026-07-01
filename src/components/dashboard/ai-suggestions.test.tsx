@@ -2,11 +2,11 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { AISuggestions } from './ai-suggestions';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 import { useCollection } from '@/firebase/firestore/use-collection';
-import { getEfficiencyImprovementSuggestions } from '@/ai/flows/efficiency-improvement-suggestions';
+import { getSuggestions } from '@/lib/actions';
 
 // Mock dependencies
 vi.mock('@/firebase/firestore/use-collection');
-vi.mock('@/ai/flows/efficiency-improvement-suggestions');
+vi.mock('@/lib/actions');
 vi.mock('@/firebase/use-memo-firebase', () => ({
     useMemoFirebase: (fn: any) => fn(),
 }));
@@ -53,7 +53,7 @@ describe('AISuggestions', () => {
 
     it('handles loading state during suggestion generation', async () => {
         // Mock AI call to hang or take time if we could, but here we just check state changes
-        (getEfficiencyImprovementSuggestions as any).mockImplementation(() => new Promise(() => { })); // Never resolves for this test
+        (getSuggestions as any).mockImplementation(() => new Promise(() => { })); // Never resolves for this test
 
         render(<AISuggestions />);
 
@@ -65,7 +65,7 @@ describe('AISuggestions', () => {
     });
 
     it('displays suggestions on success', async () => {
-        (getEfficiencyImprovementSuggestions as any).mockResolvedValue(mockSuggestionsResult);
+        (getSuggestions as any).mockResolvedValue(mockSuggestionsResult);
 
         render(<AISuggestions />);
 
@@ -80,7 +80,7 @@ describe('AISuggestions', () => {
     });
 
     it('handles errors gracefully', async () => {
-        (getEfficiencyImprovementSuggestions as any).mockRejectedValue(new Error('AI Service Failed'));
+        (getSuggestions as any).mockResolvedValue({ error: 'AI Service Failed' });
 
         render(<AISuggestions />);
 
@@ -88,7 +88,7 @@ describe('AISuggestions', () => {
 
         await waitFor(() => {
             expect(screen.getByText('දෝෂයක් ඇතිවිය')).toBeDefined();
-            expect(screen.getByText('AI වෙතින් යෝජනා ලබා ගැනීමට නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න.')).toBeDefined();
+            expect(screen.getByText('AI Service Failed')).toBeDefined();
         });
     });
 

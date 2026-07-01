@@ -1,5 +1,3 @@
-'use client';
-
 import { z } from 'zod';
 import { MACHINE_TYPES } from '@/lib/constants';
 
@@ -126,6 +124,17 @@ export interface ScheduleSegment {
     opId: string;
     count: number;
     completed?: boolean;
+}
+
+/**
+ * A scheduled non-working break (tea, lunch, etc.).
+ * `start` is minutes from shift start (wall-clock); `duration` in minutes.
+ */
+export interface BreakConfig {
+    id: string;
+    name: string;
+    start: number;
+    duration: number;
 }
 
 export interface DailyPlan {
