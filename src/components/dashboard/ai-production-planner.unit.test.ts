@@ -10,6 +10,9 @@ vi.mock('@/lib/actions', () => ({
 
 import {
     assessNextStyleFlow,
+    buildAssignmentsFromUnits,
+    findSafeNextStylePlan,
+    flattenAssignmentUnits,
     getNextStylePrepWipLimit,
     type PlanQuality,
 } from './ai-production-planner';
@@ -68,5 +71,53 @@ describe('ai-production-planner next-style flow guard', () => {
 
         expect(decision.kind).toBe('blocked');
         expect(decision.reason).toContain('without finished output');
+    });
+
+    it('round-trips operator-level assignment units', () => {
+        const units = flattenAssignmentUnits([
+            { operationId: 'pocket', operatorIds: ['saman', 'saman', 'ruvini'] },
+            { operationId: 'fly', operatorIds: ['pushpa'] },
+        ]);
+
+        expect(units).toEqual([
+            { operationId: 'pocket', operatorId: 'saman' },
+            { operationId: 'pocket', operatorId: 'ruvini' },
+            { operationId: 'fly', operatorId: 'pushpa' },
+        ]);
+        expect(buildAssignmentsFromUnits(units)).toEqual([
+            { operationId: 'pocket', operatorIds: ['saman', 'ruvini'] },
+            { operationId: 'fly', operatorIds: ['pushpa'] },
+        ]);
+    });
+
+    it('prunes next-style operator links that are not true idle capacity', () => {
+        const primaryOnly = quality({ primaryOutput: 180 });
+        const plan = findSafeNextStylePlan(
+            [
+                { operationId: 'pocket', operatorIds: ['ruvini'] },
+                { operationId: 'bottom-hem', operatorIds: ['nilushi'] },
+            ],
+            assignments => {
+                const units = flattenAssignmentUnits(assignments);
+                const hasNilushi = units.some(unit => unit.operatorId === 'nilushi');
+                const hasRuvini = units.some(unit => unit.operatorId === 'ruvini');
+                const candidateQuality = quality({
+                    primaryOutput: hasNilushi ? 166 : 180,
+                    nextOutput: 0,
+                    nextWip: hasRuvini ? 24 : 0,
+                });
+
+                return {
+                    quality: candidateQuality,
+                    decision: assessNextStyleFlow(primaryOnly, candidateQuality),
+                };
+            }
+        );
+
+        expect(plan?.decision.kind).toBe('prep');
+        expect(plan?.removedUnits).toBe(1);
+        expect(plan?.assignments).toEqual([
+            { operationId: 'pocket', operatorIds: ['ruvini'] },
+        ]);
     });
 });

@@ -191,6 +191,16 @@ export type NextStyleFlowDecision = {
     prepWipLimit: number;
     reason: string;
 };
+export type AssignmentUnit = {
+    operationId: string;
+    operatorId: string;
+};
+export type NextStylePlanCandidate = {
+    assignments: Assignment[];
+    quality: PlanQuality;
+    decision: NextStyleFlowDecision;
+    removedUnits: number;
+};
 
 export const getNextStylePrepWipLimit = (primaryOutput: number): number => {
     const scaledLimit = Math.round(Math.max(0, primaryOutput) * NEXT_STYLE_PREP_WIP_OUTPUT_RATIO);
@@ -360,6 +370,122 @@ const estimateStyleWip = (
     });
     return total;
 };
+
+export const flattenAssignmentUnits = (items: Assignment[]): AssignmentUnit[] =>
+    items.flatMap(item =>
+        unique(item.operatorIds)
+            .filter(Boolean)
+            .map(operatorId => ({
+                operationId: item.operationId,
+                operatorId,
+            }))
+    );
+
+export const buildAssignmentsFromUnits = (units: AssignmentUnit[]): Assignment[] => {
+    const grouped = new Map<string, string[]>();
+    units.forEach(unit => {
+        const list = grouped.get(unit.operationId) || [];
+        if (!list.includes(unit.operatorId)) {
+            list.push(unit.operatorId);
+        }
+        grouped.set(unit.operationId, list);
+    });
+
+    return Array.from(grouped.entries()).map(([operationId, operatorIds]) => ({
+        operationId,
+        operatorIds,
+    }));
+};
+
+const getAssignmentUnitKey = (unit: AssignmentUnit) =>
+    `${unit.operationId}::${unit.operatorId}`;
+
+const getAcceptedPlanScore = (candidate: NextStylePlanCandidate) => {
+    const kindScore = candidate.decision.kind === 'continuous' ? 2 : 1;
+    return (
+        kindScore * 1_000_000 +
+        candidate.quality.nextOutput * 10_000 +
+        Math.min(candidate.quality.nextWip, candidate.decision.prepWipLimit) * 100 -
+        candidate.decision.primaryDrop * 1_000 -
+        candidate.removedUnits
+    );
+};
+
+const getBlockedPlanScore = (candidate: NextStylePlanCandidate) => {
+    const overPrepCap = Math.max(0, candidate.quality.nextWip - candidate.decision.prepWipLimit);
+    return (
+        -candidate.decision.primaryDrop * 10_000 -
+        overPrepCap * 500 +
+        candidate.quality.nextOutput * 1_000 +
+        Math.min(candidate.quality.nextWip, candidate.decision.prepWipLimit) * 20 -
+        candidate.removedUnits
+    );
+};
+
+export function findSafeNextStylePlan(
+    initialAssignments: Assignment[],
+    evaluateCandidate: (assignments: Assignment[]) => Omit<NextStylePlanCandidate, 'assignments' | 'removedUnits'> | null
+): NextStylePlanCandidate | null {
+    const initialUnits = flattenAssignmentUnits(initialAssignments);
+    if (initialUnits.length === 0) return null;
+
+    const evaluateUnits = (units: AssignmentUnit[]): NextStylePlanCandidate | null => {
+        const assignments = buildAssignmentsFromUnits(units);
+        const evaluated = evaluateCandidate(assignments);
+        if (!evaluated) return null;
+        return {
+            assignments,
+            quality: evaluated.quality,
+            decision: evaluated.decision,
+            removedUnits: initialUnits.length - units.length,
+        };
+    };
+
+    const initialCandidate = evaluateUnits(initialUnits);
+    if (!initialCandidate) return null;
+    if (initialCandidate.decision.kind !== 'blocked') return initialCandidate;
+
+    let bestAccepted: NextStylePlanCandidate | null = null;
+    let bestBlocked: NextStylePlanCandidate = initialCandidate;
+    let activeUnits = initialUnits;
+
+    while (activeUnits.length > 1) {
+        const removalCandidates = activeUnits
+            .map(unitToRemove => {
+                const removeKey = getAssignmentUnitKey(unitToRemove);
+                const nextUnits = activeUnits.filter(unit => getAssignmentUnitKey(unit) !== removeKey);
+                const candidate = evaluateUnits(nextUnits);
+                return candidate ? { candidate, nextUnits } : null;
+            })
+            .filter((item): item is { candidate: NextStylePlanCandidate; nextUnits: AssignmentUnit[] } => !!item);
+
+        if (removalCandidates.length === 0) break;
+
+        removalCandidates.forEach(({ candidate }) => {
+            if (candidate.decision.kind === 'blocked') {
+                if (getBlockedPlanScore(candidate) > getBlockedPlanScore(bestBlocked)) {
+                    bestBlocked = candidate;
+                }
+                return;
+            }
+
+            if (!bestAccepted || getAcceptedPlanScore(candidate) > getAcceptedPlanScore(bestAccepted)) {
+                bestAccepted = candidate;
+            }
+        });
+
+        if (bestAccepted) return bestAccepted;
+
+        const nextStep = removalCandidates
+            .filter(({ candidate }) => candidate.decision.kind === 'blocked')
+            .sort((a, b) => getBlockedPlanScore(b.candidate) - getBlockedPlanScore(a.candidate))[0];
+
+        if (!nextStep) break;
+        activeUnits = nextStep.nextUnits;
+    }
+
+    return bestAccepted || bestBlocked;
+}
 
 
 export function AIProductionPlanner(): React.ReactNode {
@@ -1651,27 +1777,44 @@ export function AIProductionPlanner(): React.ReactNode {
                             operationId: a.operationId,
                             operatorIds: a.operatorIds
                         }));
-                        const computedNextVariants = buildVariantAssignmentMap(selectedNextStyle, computedNext, 'conservative');
                         const primaryOnlyQuality = evaluatePlanQuality(
                             computedPrimary,
                             computedPrimaryVariants,
                             [],
                             {}
                         );
-                        const candidateQuality = evaluatePlanQuality(
-                            computedPrimary,
-                            computedPrimaryVariants,
-                            computedNext,
-                            computedNextVariants
-                        );
+                        const safeNextPlan = primaryOnlyQuality
+                            ? findSafeNextStylePlan(computedNext, candidateAssignments => {
+                                const candidateVariants = buildVariantAssignmentMap(selectedNextStyle, candidateAssignments, 'conservative');
+                                const candidateQuality = evaluatePlanQuality(
+                                    computedPrimary,
+                                    computedPrimaryVariants,
+                                    candidateAssignments,
+                                    candidateVariants
+                                );
+                                if (!candidateQuality) return null;
+                                return {
+                                    quality: candidateQuality,
+                                    decision: assessNextStyleFlow(primaryOnlyQuality, candidateQuality),
+                                };
+                            })
+                            : null;
 
-                        if (primaryOnlyQuality && candidateQuality) {
-                            nextBalanceDecision = assessNextStyleFlow(primaryOnlyQuality, candidateQuality);
+                        if (safeNextPlan) {
+                            nextBalanceDecision = safeNextPlan.decision;
                         }
 
-                        if (nextBalanceDecision?.kind === 'continuous' || nextBalanceDecision?.kind === 'prep') {
-                            setNextAssignments(computedNext);
-                            setNextVariantAssignments(computedNextVariants);
+                        if (safeNextPlan && (safeNextPlan.decision.kind === 'continuous' || safeNextPlan.decision.kind === 'prep')) {
+                            const safeNextVariants = buildVariantAssignmentMap(selectedNextStyle, safeNextPlan.assignments, 'conservative');
+                            const prunedText = safeNextPlan.removedUnits > 0
+                                ? ` Pruned ${safeNextPlan.removedUnits} next-style operator assignment${safeNextPlan.removedUnits === 1 ? '' : 's'} that would steal current-style capacity.`
+                                : '';
+                            nextBalanceDecision = {
+                                ...safeNextPlan.decision,
+                                reason: `${safeNextPlan.decision.reason}${prunedText}`,
+                            };
+                            setNextAssignments(safeNextPlan.assignments);
+                            setNextVariantAssignments(safeNextVariants);
                         } else {
                             setNextAssignments([]);
                             setNextVariantAssignments({});
