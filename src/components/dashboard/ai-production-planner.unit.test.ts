@@ -13,6 +13,7 @@ import {
     buildAssignmentsFromUnits,
     findSafeNextStylePlan,
     flattenAssignmentUnits,
+    getNextStylePrimaryDropLimit,
     getNextStylePrepWipLimit,
     type PlanQuality,
 } from './ai-production-planner';
@@ -46,6 +47,21 @@ describe('ai-production-planner next-style flow guard', () => {
         );
 
         expect(decision.kind).toBe('prep');
+    });
+
+    it('accepts small current-style drops within the idle-capacity tolerance', () => {
+        const primaryOnly = quality({ primaryOutput: 199 });
+        const decision = assessNextStyleFlow(
+            primaryOnly,
+            quality({
+                primaryOutput: 199 - getNextStylePrimaryDropLimit(199),
+                nextOutput: 0,
+                nextWip: 24,
+            })
+        );
+
+        expect(decision.kind).toBe('prep');
+        expect(decision.primaryDrop).toBe(3);
     });
 
     it('blocks next style assignments that steal current-style output', () => {

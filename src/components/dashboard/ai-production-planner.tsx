@@ -156,7 +156,8 @@ const AUTO_ASSIGN_GUARD_OUTPUT_DROP_PCT = 0.03;
 const AUTO_ASSIGN_GUARD_WIP_RISE_PCT = 0.1;
 const AUTO_ASSIGN_GUARD_OUTPUT_DROP_UNITS = 3;
 const AUTO_ASSIGN_GUARD_WIP_RISE_UNITS = 10;
-const NEXT_STYLE_PRIMARY_OUTPUT_DROP_LIMIT_UNITS = 2;
+const NEXT_STYLE_PRIMARY_OUTPUT_DROP_MIN_UNITS = 3;
+const NEXT_STYLE_PRIMARY_OUTPUT_DROP_PCT = 0.02;
 const NEXT_STYLE_PREP_WIP_MIN_UNITS = 20;
 const NEXT_STYLE_PREP_WIP_MAX_UNITS = 60;
 const NEXT_STYLE_PREP_WIP_OUTPUT_RATIO = 0.15;
@@ -188,6 +189,7 @@ export type PlanQuality = {
 export type NextStyleFlowDecision = {
     kind: 'continuous' | 'prep' | 'blocked';
     primaryDrop: number;
+    primaryDropLimit: number;
     prepWipLimit: number;
     reason: string;
 };
@@ -207,19 +209,26 @@ export const getNextStylePrepWipLimit = (primaryOutput: number): number => {
     return clamp(scaledLimit, NEXT_STYLE_PREP_WIP_MIN_UNITS, NEXT_STYLE_PREP_WIP_MAX_UNITS);
 };
 
+export const getNextStylePrimaryDropLimit = (primaryOutput: number): number => {
+    const scaledLimit = Math.floor(Math.max(0, primaryOutput) * NEXT_STYLE_PRIMARY_OUTPUT_DROP_PCT);
+    return Math.max(NEXT_STYLE_PRIMARY_OUTPUT_DROP_MIN_UNITS, scaledLimit);
+};
+
 export function assessNextStyleFlow(
     primaryOnly: PlanQuality,
     candidate: PlanQuality
 ): NextStyleFlowDecision {
     const primaryDrop = Math.max(0, primaryOnly.primaryOutput - candidate.primaryOutput);
+    const primaryDropLimit = getNextStylePrimaryDropLimit(primaryOnly.primaryOutput);
     const prepWipLimit = getNextStylePrepWipLimit(primaryOnly.primaryOutput);
 
-    if (primaryDrop > NEXT_STYLE_PRIMARY_OUTPUT_DROP_LIMIT_UNITS) {
+    if (primaryDrop > primaryDropLimit) {
         return {
             kind: 'blocked',
             primaryDrop,
+            primaryDropLimit,
             prepWipLimit,
-            reason: `Next style held because it reduces current style output by ${primaryDrop} pcs.`,
+            reason: `Next style held because it reduces current style output by ${primaryDrop} pcs, above the ${primaryDropLimit} pcs tolerance.`,
         };
     }
 
@@ -227,6 +236,7 @@ export function assessNextStyleFlow(
         return {
             kind: 'continuous',
             primaryDrop,
+            primaryDropLimit,
             prepWipLimit,
             reason: `Next style accepted with ${candidate.nextOutput} finished pcs and no material current-style loss.`,
         };
@@ -236,6 +246,7 @@ export function assessNextStyleFlow(
         return {
             kind: 'prep',
             primaryDrop,
+            primaryDropLimit,
             prepWipLimit,
             reason: `Next style accepted as controlled prep WIP (${candidate.nextWip}/${prepWipLimit} pcs).`,
         };
@@ -245,6 +256,7 @@ export function assessNextStyleFlow(
         return {
             kind: 'blocked',
             primaryDrop,
+            primaryDropLimit,
             prepWipLimit,
             reason: `Next style held because it creates ${candidate.nextWip} pcs WIP without finished output; prep cap is ${prepWipLimit} pcs.`,
         };
@@ -253,6 +265,7 @@ export function assessNextStyleFlow(
     return {
         kind: 'blocked',
         primaryDrop,
+        primaryDropLimit,
         prepWipLimit,
         reason: 'Next style held because no feasible idle-capacity work was found.',
     };
@@ -513,6 +526,7 @@ export function AIProductionPlanner(): React.ReactNode {
     const [aiReasoning, setAiReasoning] = useState<string | null>(null);
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
+    const [lastNextStyleDecision, setLastNextStyleDecision] = useState<NextStyleFlowDecision | null>(null);
     const [variantAssignments, setVariantAssignments] = useState<Record<string, Assignment[]>>({});
     const [nextVariantAssignments, setNextVariantAssignments] = useState<Record<string, Assignment[]>>({});
     const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
@@ -829,11 +843,13 @@ export function AIProductionPlanner(): React.ReactNode {
     useEffect(() => {
         setAssignments([]);
         setVariantAssignments({});
+        setLastNextStyleDecision(null);
     }, [selectedStyle?.id]);
 
     useEffect(() => {
         setNextAssignments([]);
         setNextVariantAssignments({});
+        setLastNextStyleDecision(null);
     }, [selectedNextStyle?.id]);
 
     // Memoize operator loads for calculations
@@ -1662,6 +1678,7 @@ export function AIProductionPlanner(): React.ReactNode {
         if (!selectedStyle) return;
         setIsBalancing(true);
         setAiReasoning(null);
+        setLastNextStyleDecision(null);
         try {
             const candidatesPool = operators.filter(o => availableOperatorIds.includes(o.id));
             const buildBalancerInput = (style: GarmentStyle, operatorPool: typeof candidatesPool = candidatesPool) => ({
@@ -1838,6 +1855,7 @@ export function AIProductionPlanner(): React.ReactNode {
                     combinedReasoning = `${combinedReasoning}\n\nNext style skipped: ${nextBalanceError}`;
                 }
             }
+            setLastNextStyleDecision(selectedNextStyle ? nextBalanceDecision : null);
             setAiReasoning(combinedReasoning);
 
             const toastTitle = !selectedNextStyle
@@ -1976,9 +1994,24 @@ export function AIProductionPlanner(): React.ReactNode {
         return estimateStyleWip(selectedNextStyle, getCount);
     }, [selectedNextStyle, scheduledCountPerRootStyleOp]);
 
+    const hasActiveNextAssignments = useMemo(
+        () => hasAnyScopedAssignments(nextAssignments, nextVariantAssignments),
+        [nextAssignments, nextVariantAssignments, hasAnyScopedAssignments]
+    );
+
     const nextStyleFlowStatus = useMemo(() => {
-        const hasNextAssignments = hasAnyScopedAssignments(nextAssignments, nextVariantAssignments);
-        if (!selectedNextStyle || !hasNextAssignments) return null;
+        if (!selectedNextStyle) return null;
+        if (!hasActiveNextAssignments) {
+            if (lastNextStyleDecision?.kind === 'blocked') {
+                return {
+                    kind: 'blocked' as const,
+                    badge: 'Held',
+                    title: 'Next style held',
+                    description: lastNextStyleDecision.reason,
+                };
+            }
+            return null;
+        }
 
         if (bottleneckOutput.next > 0) {
             return {
@@ -2006,26 +2039,34 @@ export function AIProductionPlanner(): React.ReactNode {
         };
     }, [
         selectedNextStyle,
-        nextAssignments,
-        nextVariantAssignments,
-        hasAnyScopedAssignments,
+        hasActiveNextAssignments,
+        lastNextStyleDecision,
         bottleneckOutput.next,
         nextStyleWip,
     ]);
 
     const theoreticalCapacityPotential = useMemo(() => {
-        const totalSmv = (selectedStyle?.totalSmv || 0) + (selectedNextStyle?.totalSmv || 0);
-        const avgSmv = totalSmv / (selectedNextStyle ? 2 : 1);
+        const includesNextStyle = hasActiveNextAssignments && !!selectedNextStyle;
+        const totalSmv = (selectedStyle?.totalSmv || 0) + (includesNextStyle ? (selectedNextStyle?.totalSmv || 0) : 0);
+        const avgSmv = totalSmv / (includesNextStyle ? 2 : 1);
         const count = availableOperatorIds.length || 0;
         if (!avgSmv || !count) return 0;
         return Math.floor((availableMinutes * count * 0.85) / avgSmv);
-    }, [selectedStyle?.totalSmv, selectedNextStyle?.totalSmv, selectedNextStyle?.id, availableOperatorIds.length, availableMinutes]);
+    }, [
+        selectedStyle?.totalSmv,
+        selectedNextStyle?.totalSmv,
+        selectedNextStyle?.id,
+        hasActiveNextAssignments,
+        availableOperatorIds.length,
+        availableMinutes
+    ]);
 
     const orderBoundedPotential = useMemo(() => {
-        const remainingOrders = selectedNextStyle
+        const includesNextStyle = hasActiveNextAssignments && !!selectedNextStyle;
+        const remainingOrders = includesNextStyle
             ? remainingPrimaryQty + remainingNextQty
             : remainingPrimaryQty;
-        const hasOrderBound = (selectedStyle?.quantity || 0) > 0 || (selectedNextStyle?.quantity || 0) > 0;
+        const hasOrderBound = (selectedStyle?.quantity || 0) > 0 || (includesNextStyle && (selectedNextStyle?.quantity || 0) > 0);
         if (!hasOrderBound) return theoreticalCapacityPotential;
         if (remainingOrders <= 0) return 0;
         return Math.min(theoreticalCapacityPotential, remainingOrders);
@@ -2033,6 +2074,7 @@ export function AIProductionPlanner(): React.ReactNode {
         selectedStyle?.quantity,
         selectedNextStyle?.id,
         selectedNextStyle?.quantity,
+        hasActiveNextAssignments,
         remainingPrimaryQty,
         remainingNextQty,
         theoreticalCapacityPotential
@@ -2887,8 +2929,10 @@ export function AIProductionPlanner(): React.ReactNode {
                             nextStyleFlowStatus?.kind === 'prep'
                                 ? 'Prep WIP'
                                 : nextStyleFlowStatus?.kind === 'blocked'
-                                    ? 'No Flow'
-                                    : 'Continuous Flow'
+                                    ? 'Held'
+                                    : hasActiveNextAssignments
+                                        ? 'Continuous Flow'
+                                        : 'Not Scheduled'
                         })`,
                         style: selectedNextStyle,
                         metrics: nextFlowMetrics
