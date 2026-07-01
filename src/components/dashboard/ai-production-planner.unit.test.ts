@@ -12,12 +12,14 @@ import {
     assessNextStyleFlow,
     assessRebalanceCandidate,
     buildAssignmentsFromUnits,
+    buildMachineLayoutGraph,
     findSafeNextStylePlan,
     flattenAssignmentUnits,
     getNextStylePrimaryDropLimit,
     getNextStylePrepWipLimit,
     type PlanQuality,
 } from './ai-production-planner';
+import type { Assignment, GarmentStyle, Operator } from '@/lib/types';
 
 const quality = (overrides: Partial<PlanQuality>): PlanQuality => ({
     actualOutput: 180,
@@ -175,5 +177,83 @@ describe('ai-production-planner next-style flow guard', () => {
 
         expect(decision.action).toBe('accept');
         expect(decision.wipDelta).toBe(-8);
+    });
+
+    it('builds machine layout stations, part flow, and operator movement routes', () => {
+        const style: GarmentStyle = {
+            id: 'style-1',
+            name: 'Trouser',
+            buyer: 'DEEZ',
+            totalSmv: 12,
+            quantity: 100,
+            status: 'active',
+            startDate: '2026-07-01',
+            operations: [
+                {
+                    id: 'cut',
+                    name: 'Cut Panels',
+                    smv: 120,
+                    machineType: 'Cutting Table',
+                    dependencies: [],
+                    completedQuantity: 20,
+                },
+                {
+                    id: 'sew',
+                    name: 'Side Seam',
+                    smv: 180,
+                    machineType: 'Single Needle',
+                    dependencies: ['cut'],
+                    completedQuantity: 12,
+                },
+                {
+                    id: 'pack',
+                    name: 'Packing',
+                    smv: 90,
+                    machineType: 'Packing Table',
+                    dependencies: ['sew'],
+                    completedQuantity: 8,
+                },
+            ],
+        };
+        const operators = [
+            { id: 'op-a', name: 'Nimali', role: 'operator', email: 'nimali@example.com', skills: [] },
+            { id: 'op-b', name: 'Saman', role: 'operator', email: 'saman@example.com', skills: [] },
+        ] as Operator[];
+        const assignments: Assignment[] = [
+            { operationId: 'cut', operatorIds: ['op-a'] },
+            { operationId: 'sew', operatorIds: ['op-a', 'op-b'] },
+            { operationId: 'pack', operatorIds: ['op-b'] },
+        ];
+
+        const graph = buildMachineLayoutGraph(
+            [{ styleScope: 'primary', styleLabel: 'Current Style', style, assignments }],
+            operators,
+            {
+                'style-1::cut': 30,
+                'style-1::sew': 18,
+                'style-1::pack': 10,
+            }
+        );
+
+        expect(graph.stations.map(station => station.operationName)).toEqual([
+            'Cut Panels',
+            'Side Seam',
+            'Packing',
+        ]);
+        expect(graph.stations[0].inputLabels).toEqual(['New parts']);
+        expect(graph.stations[1].inputLabels).toEqual(['Cut Panels']);
+        expect(graph.stations[2].outputLabels).toEqual(['Finished pieces']);
+        expect(graph.partLinks).toEqual(expect.arrayContaining([
+            expect.objectContaining({ label: 'New parts', toStationId: 'primary-style-1-cut' }),
+            expect.objectContaining({ label: 'Completed parts', fromStationId: 'primary-style-1-cut', toStationId: 'primary-style-1-sew' }),
+        ]));
+        expect(graph.operatorMovements.find(movement => movement.operatorId === 'op-a')).toMatchObject({
+            stationLabels: ['Cut Panels', 'Side Seam'],
+            movementCount: 1,
+        });
+        expect(graph.operatorMovements.find(movement => movement.operatorId === 'op-b')).toMatchObject({
+            stationLabels: ['Side Seam', 'Packing'],
+            movementCount: 1,
+        });
     });
 });

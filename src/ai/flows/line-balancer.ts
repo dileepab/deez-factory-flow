@@ -7,6 +7,7 @@ import {
   type LineBalancerInput,
   type LineBalancerOutput,
 } from './line-balancer-schemas';
+import { getAiErrorText, runWithGeminiRetry } from './gemini-retry';
 
 export async function getLineBalancerSuggestions(
   input: LineBalancerInput
@@ -77,7 +78,16 @@ const lineBalancerFlow = ai.defineFlow(
     outputSchema: LineBalancerOutputSchema,
   },
   async input => {
-    const { output } = await prompt(input);
+    const { output } = await runWithGeminiRetry(
+      () => prompt(input),
+      {
+        onRetry: ({ nextAttempt, maxAttempts, delayMs, error }) => {
+          console.warn(
+            `AI line balancer retry ${nextAttempt}/${maxAttempts} in ${delayMs}ms: ${getAiErrorText(error)}`
+          );
+        },
+      }
+    );
     return output!;
   }
 );

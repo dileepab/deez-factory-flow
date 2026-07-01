@@ -34,11 +34,11 @@ import type { GarmentStyle, Operator, AnyUser, Assignment, ProductionEntry, Brea
 import { cloneDefaultBreaks } from '@/lib/shift-schedule';
 import { useMemoFirebase } from '@/firebase/use-memo-firebase';
 import { useMachineTypes } from '@/hooks/use-machine-types';
-import { Loader2, UserPlus, X, CheckCircle2, AlertCircle, Wand2, ClipboardList, RefreshCcw, ChevronDown, ChevronUp } from 'lucide-react';
+import { Loader2, UserPlus, X, CheckCircle2, AlertCircle, ClipboardList, RefreshCcw, ChevronDown, ChevronUp } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem } from '@/components/ui/command';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { MultiSelect, Option } from '@/components/ui/multi-select';
+import { MultiSelect } from '@/components/ui/multi-select';
 import { DailyTimeline } from './daily-timeline';
 import { OperatorJobCards } from './operator-job-cards';
 import {
@@ -53,7 +53,7 @@ import { useToast } from "@/hooks/use-toast";
 import { doc, setDoc, Timestamp } from "firebase/firestore";
 import type { DailyPlan, ScheduleSegment } from "@/lib/types";
 import { format, startOfDay, subDays } from "date-fns";
-import { Save, CalendarClock, Brain, Sparkles, Coffee, Clock, Printer, Plus, Trash2 } from "lucide-react";
+import { Save, CalendarClock, Brain, Sparkles, Coffee, Plus, Trash2, Factory, PackageCheck, MoveRight, Route, ArrowRight } from "lucide-react";
 import { runLineBalancer } from '@/lib/actions';
 
 // Helper function to calculate output from simulation event
@@ -498,6 +498,196 @@ export const buildAssignmentsFromUnits = (units: AssignmentUnit[]): Assignment[]
         operatorIds,
     }));
 };
+
+type MachineLayoutPlan = {
+    styleScope: PlannerScope;
+    styleLabel: string;
+    style: GarmentStyle;
+    assignments: Assignment[];
+};
+
+export type MachineLayoutStation = {
+    id: string;
+    sequence: number;
+    styleScope: PlannerScope;
+    styleLabel: string;
+    styleName: string;
+    operationId: string;
+    operationName: string;
+    machineType: string;
+    operatorIds: string[];
+    operatorNames: string[];
+    inputLabels: string[];
+    outputLabels: string[];
+    scheduledCount: number;
+    completedCount: number;
+    isStart: boolean;
+    isFinal: boolean;
+};
+
+export type MachineLayoutPartLink = {
+    id: string;
+    styleScope: PlannerScope;
+    fromStationId?: string;
+    toStationId: string;
+    label: string;
+};
+
+export type MachineLayoutOperatorMovement = {
+    operatorId: string;
+    operatorName: string;
+    stationIds: string[];
+    stationLabels: string[];
+    machineTypes: string[];
+    styleLabels: string[];
+    movementCount: number;
+};
+
+export type MachineLayoutGraph = {
+    stations: MachineLayoutStation[];
+    partLinks: MachineLayoutPartLink[];
+    operatorMovements: MachineLayoutOperatorMovement[];
+};
+
+const sortOperationsByDependency = (operations: GarmentStyle['operations']) => {
+    const operationById = new Map(operations.map(operation => [operation.id, operation]));
+    const unresolved = new Set(operations.map(operation => operation.id));
+    const ordered: GarmentStyle['operations'] = [];
+
+    while (unresolved.size > 0) {
+        const ready = operations.find(operation => {
+            if (!unresolved.has(operation.id)) return false;
+            return (operation.dependencies || []).every(dependencyId => (
+                !operationById.has(dependencyId) || !unresolved.has(dependencyId)
+            ));
+        });
+
+        if (!ready) {
+            operations
+                .filter(operation => unresolved.has(operation.id))
+                .forEach(operation => {
+                    ordered.push(operation);
+                    unresolved.delete(operation.id);
+                });
+            break;
+        }
+
+        ordered.push(ready);
+        unresolved.delete(ready.id);
+    }
+
+    return ordered;
+};
+
+export function buildMachineLayoutGraph(
+    plans: MachineLayoutPlan[],
+    operators: Operator[],
+    scheduledCountsByStyleOp: Record<string, number>
+): MachineLayoutGraph {
+    const operatorById = new Map(operators.map(operator => [operator.id, operator]));
+    const stations: MachineLayoutStation[] = [];
+    const partLinks: MachineLayoutPartLink[] = [];
+    const operatorStations = new Map<string, MachineLayoutStation[]>();
+
+    plans.forEach(plan => {
+        const orderedOperations = sortOperationsByDependency(plan.style.operations);
+        const operationNameById = new Map(plan.style.operations.map(operation => [operation.id, operation.name]));
+        const stationIdByOperation = new Map(
+            plan.style.operations.map(operation => [
+                operation.id,
+                `${plan.styleScope}-${plan.style.id}-${operation.id}`,
+            ])
+        );
+        const assignmentByOperation = new Map<string, string[]>();
+        plan.assignments.forEach(assignment => {
+            const existing = assignmentByOperation.get(assignment.operationId) || [];
+            assignmentByOperation.set(
+                assignment.operationId,
+                unique([...existing, ...assignment.operatorIds.filter(Boolean)])
+            );
+        });
+
+        orderedOperations.forEach(operation => {
+            const operatorIds = assignmentByOperation.get(operation.id) || [];
+            const successors = plan.style.operations.filter(nextOperation =>
+                (nextOperation.dependencies || []).includes(operation.id)
+            );
+            const dependencies = operation.dependencies || [];
+            const station: MachineLayoutStation = {
+                id: stationIdByOperation.get(operation.id)!,
+                sequence: stations.length,
+                styleScope: plan.styleScope,
+                styleLabel: plan.styleLabel,
+                styleName: plan.style.name,
+                operationId: operation.id,
+                operationName: operation.name,
+                machineType: operation.machineType,
+                operatorIds,
+                operatorNames: operatorIds.map(operatorId => operatorById.get(operatorId)?.name || 'Unassigned operator'),
+                inputLabels: dependencies.length > 0
+                    ? dependencies.map(dependencyId => operationNameById.get(dependencyId) || dependencyId)
+                    : ['New parts'],
+                outputLabels: successors.length > 0
+                    ? successors.map(successor => successor.name)
+                    : ['Finished pieces'],
+                scheduledCount: Math.floor(scheduledCountsByStyleOp[buildRootStyleOpKey(plan.style.id, operation.id)] || 0),
+                completedCount: Math.floor(operation.completedQuantity || 0),
+                isStart: dependencies.length === 0,
+                isFinal: successors.length === 0,
+            };
+
+            stations.push(station);
+            operatorIds.forEach(operatorId => {
+                const list = operatorStations.get(operatorId) || [];
+                list.push(station);
+                operatorStations.set(operatorId, list);
+            });
+
+            if (dependencies.length === 0) {
+                partLinks.push({
+                    id: `${station.id}-new-parts`,
+                    styleScope: plan.styleScope,
+                    toStationId: station.id,
+                    label: 'New parts',
+                });
+            }
+
+            dependencies.forEach(dependencyId => {
+                const fromStationId = stationIdByOperation.get(dependencyId);
+                if (!fromStationId) return;
+                partLinks.push({
+                    id: `${fromStationId}-${station.id}`,
+                    styleScope: plan.styleScope,
+                    fromStationId,
+                    toStationId: station.id,
+                    label: 'Completed parts',
+                });
+            });
+        });
+    });
+
+    const operatorMovements = Array.from(operatorStations.entries())
+        .map(([operatorId, rawStations]) => {
+            const uniqueStations = rawStations
+                .filter((station, index, items) => items.findIndex(item => item.id === station.id) === index)
+                .sort((a, b) => a.sequence - b.sequence);
+            return {
+                operatorId,
+                operatorName: operatorById.get(operatorId)?.name || 'Unassigned operator',
+                stationIds: uniqueStations.map(station => station.id),
+                stationLabels: uniqueStations.map(station => station.operationName),
+                machineTypes: unique(uniqueStations.map(station => station.machineType)),
+                styleLabels: unique(uniqueStations.map(station => station.styleLabel)),
+                movementCount: Math.max(0, uniqueStations.length - 1),
+            };
+        })
+        .sort((a, b) => {
+            if (b.movementCount !== a.movementCount) return b.movementCount - a.movementCount;
+            return a.operatorName.localeCompare(b.operatorName);
+        });
+
+    return { stations, partLinks, operatorMovements };
+}
 
 const getAssignmentUnitKey = (unit: AssignmentUnit) =>
     `${unit.operationId}::${unit.operatorId}`;
@@ -1766,7 +1956,6 @@ export function AIProductionPlanner(): React.ReactNode {
     const handleAILineBalance = useCallback(async () => {
         if (!selectedStyle) return;
         setIsBalancing(true);
-        setAiReasoning(null);
         try {
             const candidatesPool = operators.filter(o => availableOperatorIds.includes(o.id));
             const previousAiReasoning = aiReasoning;
@@ -1806,9 +1995,12 @@ export function AIProductionPlanner(): React.ReactNode {
 
             const result = await runLineBalancer(buildBalancerInput(selectedStyle));
             if ('error' in result) {
+                const description = hasExistingPlan
+                    ? `${result.error} Current/best balance remains on screen.`
+                    : result.error;
                 toast({
                     title: "AI Balancing Failed",
-                    description: result.error,
+                    description,
                     variant: "destructive"
                 });
                 return;
@@ -1996,9 +2188,13 @@ export function AIProductionPlanner(): React.ReactNode {
                 description: toastDescription,
             });
         } catch (error: any) {
+            const message = error.message || "Failed to optimize line using AI. Please try again.";
+            const description = hasAnyScopedAssignments(assignments, variantAssignments)
+                ? `${message} Current/best balance remains on screen.`
+                : message;
             toast({
                 title: "AI Balancing Failed",
-                description: error.message || "Failed to optimize line using AI. Please try again.",
+                description,
                 variant: "destructive"
             });
         } finally {
@@ -2128,6 +2324,59 @@ export function AIProductionPlanner(): React.ReactNode {
         () => hasAnyScopedAssignments(nextAssignments, nextVariantAssignments),
         [nextAssignments, nextVariantAssignments, hasAnyScopedAssignments]
     );
+
+    const machineLayoutGraph = useMemo(() => {
+        const plans: MachineLayoutPlan[] = [];
+        const collapseAssignments = (
+            baseAssignments: Assignment[],
+            scopedAssignments: Record<string, Assignment[]>
+        ) => buildAssignmentsFromUnits(flattenAssignmentUnits([
+            ...baseAssignments,
+            ...Object.values(scopedAssignments).flat(),
+        ]));
+
+        if (selectedStyle && hasAnyScopedAssignments(assignments, variantAssignments)) {
+            plans.push({
+                styleScope: 'primary',
+                styleLabel: 'Current Style',
+                style: selectedStyle,
+                assignments: collapseAssignments(assignments, variantAssignments),
+            });
+        }
+
+        if (selectedNextStyle && hasAnyScopedAssignments(nextAssignments, nextVariantAssignments)) {
+            plans.push({
+                styleScope: 'next',
+                styleLabel: 'Next Style',
+                style: selectedNextStyle,
+                assignments: collapseAssignments(nextAssignments, nextVariantAssignments),
+            });
+        }
+
+        return buildMachineLayoutGraph(plans, operators, scheduledCountPerRootStyleOp);
+    }, [
+        selectedStyle,
+        selectedNextStyle,
+        assignments,
+        variantAssignments,
+        nextAssignments,
+        nextVariantAssignments,
+        operators,
+        scheduledCountPerRootStyleOp,
+        hasAnyScopedAssignments,
+    ]);
+
+    const machineLayoutStyleGroups = useMemo(() => {
+        return ([
+            { scope: 'primary' as const, style: selectedStyle },
+            { scope: 'next' as const, style: selectedNextStyle },
+        ])
+            .map(group => ({
+                ...group,
+                stations: machineLayoutGraph.stations.filter(station => station.styleScope === group.scope),
+            }))
+            .filter(group => group.style && group.stations.length > 0);
+    }, [machineLayoutGraph.stations, selectedStyle, selectedNextStyle]);
 
     const nextStyleFlowStatus = useMemo(() => {
         if (!selectedNextStyle) return null;
@@ -2959,6 +3208,171 @@ export function AIProductionPlanner(): React.ReactNode {
                             </Button>
                         </div>
                     </div>
+
+                    {machineLayoutStyleGroups.length > 0 && (
+                        <div className="rounded-md border bg-background p-4 space-y-5">
+                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                                <div>
+                                    <h4 className="text-sm font-semibold flex items-center gap-2">
+                                        <Factory className="h-4 w-4 text-indigo-500" />
+                                        Machine Layout Graph
+                                    </h4>
+                                    <p className="text-xs text-muted-foreground">
+                                        Accepted balance with part movement and operator station movement.
+                                    </p>
+                                </div>
+                                <Badge variant="outline" className="w-fit">
+                                    {machineLayoutGraph.stations.length} machines
+                                </Badge>
+                            </div>
+
+                            <div className="space-y-5">
+                                {machineLayoutStyleGroups.map(group => (
+                                    <div key={group.scope} className="space-y-3">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            <Badge variant={group.scope === 'primary' ? 'default' : 'secondary'}>
+                                                {group.scope === 'primary' ? 'Current Style' : 'Next Style'}
+                                            </Badge>
+                                            <span className="text-sm font-medium">{group.style?.name}</span>
+                                            <span className="text-xs text-muted-foreground">
+                                                {group.stations.length} station{group.stations.length === 1 ? '' : 's'}
+                                            </span>
+                                        </div>
+
+                                        <div className="overflow-x-auto pb-2">
+                                            <div className="flex min-w-max items-stretch gap-3">
+                                                {group.stations.map((station, index) => (
+                                                    <div key={station.id} className="flex items-center gap-3">
+                                                        <div className={`w-[260px] shrink-0 rounded-md border p-3 space-y-3 ${
+                                                            station.isFinal
+                                                                ? 'bg-emerald-50/60 border-emerald-200 dark:bg-emerald-950/10 dark:border-emerald-900/60'
+                                                                : 'bg-muted/20'
+                                                        }`}>
+                                                            <div className="flex items-start justify-between gap-3">
+                                                                <div className="min-w-0">
+                                                                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                                                                        {station.styleLabel}
+                                                                    </div>
+                                                                    <div className="text-sm font-semibold leading-tight truncate" title={station.operationName}>
+                                                                        {station.operationName}
+                                                                    </div>
+                                                                </div>
+                                                                <Badge variant={station.isFinal ? 'default' : 'outline'} className="shrink-0 text-[10px]">
+                                                                    {station.isFinal ? 'Finish' : `Step ${index + 1}`}
+                                                                </Badge>
+                                                            </div>
+
+                                                            <div className="flex flex-wrap gap-1.5">
+                                                                <Badge variant="outline" className="text-[10px]">
+                                                                    {station.machineType}
+                                                                </Badge>
+                                                                <Badge variant="secondary" className="text-[10px]">
+                                                                    Plan {station.scheduledCount} pcs
+                                                                </Badge>
+                                                                {station.completedCount > 0 && (
+                                                                    <Badge variant="secondary" className="text-[10px]">
+                                                                        Done {station.completedCount} pcs
+                                                                    </Badge>
+                                                                )}
+                                                            </div>
+
+                                                            <div className="space-y-2 text-[11px]">
+                                                                <div>
+                                                                    <div className="mb-1 flex items-center gap-1 font-medium text-muted-foreground">
+                                                                        <PackageCheck className="h-3.5 w-3.5" />
+                                                                        Parts In
+                                                                    </div>
+                                                                    <div className="flex flex-wrap gap-1">
+                                                                        {station.inputLabels.map(label => (
+                                                                            <Badge key={`${station.id}-in-${label}`} variant="outline" className="text-[10px] bg-background">
+                                                                                {station.isStart ? label : `From ${label}`}
+                                                                            </Badge>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                                <div>
+                                                                    <div className="mb-1 flex items-center gap-1 font-medium text-muted-foreground">
+                                                                        <MoveRight className="h-3.5 w-3.5" />
+                                                                        Parts Out
+                                                                    </div>
+                                                                    <div className="flex flex-wrap gap-1">
+                                                                        {station.outputLabels.map(label => (
+                                                                            <Badge key={`${station.id}-out-${label}`} variant="outline" className="text-[10px] bg-background">
+                                                                                {station.isFinal ? label : `To ${label}`}
+                                                                            </Badge>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+
+                                                            <div className="border-t pt-2">
+                                                                <div className="mb-1 text-[10px] uppercase tracking-wider text-muted-foreground">
+                                                                    Operators
+                                                                </div>
+                                                                <div className="flex flex-wrap gap-1">
+                                                                    {station.operatorNames.length > 0 ? station.operatorNames.map(name => (
+                                                                        <Badge key={`${station.id}-${name}`} variant="secondary" className="text-[10px]">
+                                                                            {name}
+                                                                        </Badge>
+                                                                    )) : (
+                                                                        <Badge variant="destructive" className="text-[10px]">
+                                                                            Unassigned
+                                                                        </Badge>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        {index < group.stations.length - 1 && (
+                                                            <div className="flex h-full min-w-8 items-center justify-center text-muted-foreground">
+                                                                <ArrowRight className="h-5 w-5" />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+
+                            {machineLayoutGraph.operatorMovements.length > 0 && (
+                                <div className="border-t pt-4 space-y-3">
+                                    <div className="flex items-center gap-2 text-sm font-semibold">
+                                        <Route className="h-4 w-4 text-indigo-500" />
+                                        Operator Movement
+                                    </div>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                                        {machineLayoutGraph.operatorMovements.map(movement => (
+                                            <div key={movement.operatorId} className="rounded-md border bg-muted/20 p-3">
+                                                <div className="flex items-start justify-between gap-2">
+                                                    <div className="font-medium text-sm">{movement.operatorName}</div>
+                                                    <Badge variant={movement.movementCount > 0 ? 'outline' : 'secondary'} className="text-[10px]">
+                                                        {movement.movementCount > 0
+                                                            ? `${movement.movementCount} move${movement.movementCount === 1 ? '' : 's'}`
+                                                            : 'Dedicated'}
+                                                    </Badge>
+                                                </div>
+                                                <div className="mt-2 flex flex-wrap items-center gap-1">
+                                                    {movement.stationLabels.map((label, index) => (
+                                                        <span key={`${movement.operatorId}-${label}-${index}`} className="inline-flex items-center gap-1">
+                                                            {index > 0 && <MoveRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                                                            <Badge variant="outline" className="max-w-[140px] truncate bg-background text-[10px]" title={label}>
+                                                                {label}
+                                                            </Badge>
+                                                        </span>
+                                                    ))}
+                                                </div>
+                                                <div className="mt-2 text-[11px] text-muted-foreground">
+                                                    {movement.machineTypes.join(' -> ')} - {movement.styleLabels.join(', ')}
+                                                </div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
 
                     {selectedStyle && (
                         <div className="rounded-md border bg-muted/20 p-4 space-y-4">

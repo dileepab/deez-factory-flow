@@ -9,6 +9,7 @@ import { UserRole, UserRoleSchema } from './types';
 import type { EfficiencyImprovementSuggestionsOutput } from '@/ai/flows/efficiency-improvement-suggestions';
 import { LineBalancerInputSchema } from '@/ai/flows/line-balancer-schemas';
 import type { LineBalancerInput, LineBalancerOutput } from '@/ai/flows/line-balancer-schemas';
+import { getRetryableAiErrorMessage } from '@/ai/flows/gemini-retry';
 
 const signupSchema = z
   .object({
@@ -277,6 +278,11 @@ export async function runLineBalancer(
   } catch (error: any) {
     if (isMissingAiApiKeyError(error)) {
       return { error: AI_API_KEY_ERROR };
+    }
+    const retryableMessage = getRetryableAiErrorMessage(error);
+    if (retryableMessage) {
+      console.warn('Retryable AI line balancer failure after retries:', error);
+      return { error: retryableMessage };
     }
 
     console.error('Error running AI line balancer:', error);
