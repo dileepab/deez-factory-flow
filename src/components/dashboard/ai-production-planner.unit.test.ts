@@ -285,11 +285,13 @@ describe('ai-production-planner next-style flow guard', () => {
             expect.objectContaining({
                 id: 'primary-style-1-cut-new-parts-source',
                 type: 'partSource',
+                draggable: true,
                 data: expect.objectContaining({ label: 'New parts' }),
             }),
             expect.objectContaining({
                 id: 'primary-style-1-cut',
                 type: 'machineStation',
+                draggable: true,
                 data: expect.objectContaining({ label: 'Cut Panels' }),
             }),
         ]));
@@ -372,6 +374,16 @@ describe('ai-production-planner next-style flow guard', () => {
         ]));
 
         const flow = buildMachineFlowElements(graph);
+        expect(flow.nodes).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'primary-polo-collar',
+                draggable: true,
+            }),
+            expect.objectContaining({
+                id: 'primary-polo-sleeve',
+                draggable: true,
+            }),
+        ]));
         expect(flow.edges).toEqual(expect.arrayContaining([
             expect.objectContaining({
                 source: 'primary-polo-collar',

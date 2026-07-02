@@ -12,6 +12,7 @@ import {
     Position,
     ReactFlow,
     getBezierPath,
+    useNodesState,
     type Edge,
     type EdgeProps,
     type Node,
@@ -640,7 +641,7 @@ function MachineStationFlowNode({ data }: NodeProps<MachineFlowNode>) {
     if (!station) return null;
 
     return (
-        <div className={`w-[260px] rounded-md border bg-background p-3 shadow-sm ${
+        <div className={`w-[260px] cursor-grab rounded-md border bg-background p-3 shadow-sm active:cursor-grabbing ${
             station.styleScope === 'next'
                 ? 'border-blue-300 dark:border-blue-800'
                 : station.isFinal
@@ -717,7 +718,7 @@ function MachineStationFlowNode({ data }: NodeProps<MachineFlowNode>) {
 
 function PartSourceFlowNode({ data }: NodeProps<MachineFlowNode>) {
     return (
-        <div className="w-[132px] rounded-md border border-lime-300 bg-lime-50 px-3 py-2 text-lime-950 shadow-sm dark:border-lime-800 dark:bg-lime-950/30 dark:text-lime-100">
+        <div className="w-[132px] cursor-grab rounded-md border border-lime-300 bg-lime-50 px-3 py-2 text-lime-950 shadow-sm active:cursor-grabbing dark:border-lime-800 dark:bg-lime-950/30 dark:text-lime-100">
             <Handle
                 id="source"
                 type="source"
@@ -1173,7 +1174,7 @@ export function buildMachineFlowElements(graph: MachineLayoutGraph): MachineFlow
         },
         sourcePosition: Position.Right,
         targetPosition: Position.Left,
-        draggable: false,
+        draggable: true,
     }));
 
     const stationById = new Map(layout.nodes.map(node => [node.id, node]));
@@ -1196,7 +1197,7 @@ export function buildMachineFlowElements(graph: MachineLayoutGraph): MachineFlow
                     styleScope: target.styleScope,
                 },
                 sourcePosition: Position.Right,
-                draggable: false,
+                draggable: true,
             }];
         });
 
@@ -2954,6 +2955,11 @@ export function AIProductionPlanner(): React.ReactNode {
         () => buildMachineFlowElements(machineLayoutGraph),
         [machineLayoutGraph]
     );
+    const [machineFlowNodes, setMachineFlowNodes, onMachineFlowNodesChange] = useNodesState<MachineFlowNode>(machineFlowElements.nodes);
+
+    useEffect(() => {
+        setMachineFlowNodes(machineFlowElements.nodes);
+    }, [machineFlowElements.nodes, setMachineFlowNodes]);
 
     const nextStyleFlowStatus = useMemo(() => {
         if (!selectedNextStyle) return null;
@@ -3838,11 +3844,12 @@ export function AIProductionPlanner(): React.ReactNode {
                                                 }}
                                             >
                                                 <ReactFlow
-                                                    nodes={machineFlowElements.nodes}
+                                                    nodes={machineFlowNodes}
                                                     edges={machineFlowElements.edges}
                                                     nodeTypes={machineFlowNodeTypes}
                                                     edgeTypes={machineFlowEdgeTypes}
-                                                    nodesDraggable={false}
+                                                    onNodesChange={onMachineFlowNodesChange}
+                                                    nodesDraggable
                                                     nodesConnectable={false}
                                                     elementsSelectable={false}
                                                     fitView
