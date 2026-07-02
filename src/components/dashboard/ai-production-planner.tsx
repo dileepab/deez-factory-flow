@@ -72,6 +72,14 @@ import type { DailyPlan, ScheduleSegment } from "@/lib/types";
 import { format, startOfDay, subDays } from "date-fns";
 import { Save, CalendarClock, Brain, Sparkles, Coffee, Plus, Trash2, Factory, PackageCheck, MoveRight, Route, ArrowRight } from "lucide-react";
 import { runLineBalancer } from '@/lib/actions';
+import { calculateFactorySalaryProjection, getFactorySalarySettings } from '@/lib/factory-salary';
+
+const formatLkr = (amount: number) =>
+    new Intl.NumberFormat('en-LK', {
+        style: 'currency',
+        currency: 'LKR',
+        maximumFractionDigits: 0,
+    }).format(Math.round(amount));
 
 // Helper function to calculate output from simulation event
 // Exported for testing
@@ -2201,6 +2209,37 @@ export function AIProductionPlanner(): React.ReactNode {
         return { primary: Math.floor(primaryMin), next: Math.floor(nextMin) };
     }, [selectedStyle, selectedNextStyle, simResult.schedule]);
 
+    const salarySettings = useMemo(() => getFactorySalarySettings(config), [config]);
+    const activePlanningOperatorIds = useMemo(() => {
+        const assignedOperatorIds = unique(allPlannerAssignments.flatMap(assignment => assignment.operatorIds));
+        if (assignedOperatorIds.length > 0) return assignedOperatorIds;
+        if (availableOperatorIds.length > 0) return availableOperatorIds;
+        return operators.map(operator => operator.id);
+    }, [allPlannerAssignments, availableOperatorIds, operators]);
+    const salaryProjection = useMemo(() => calculateFactorySalaryProjection({
+        operatorCount: activePlanningOperatorIds.length || 1,
+        plannedDailyOutput: allPlannerAssignments.length > 0 ? bottleneckOutput.primary + bottleneckOutput.next : 0,
+        settings: salarySettings,
+    }), [
+        activePlanningOperatorIds.length,
+        allPlannerAssignments.length,
+        bottleneckOutput.primary,
+        bottleneckOutput.next,
+        salarySettings,
+    ]);
+    const salaryTargetBadge = useMemo(() => {
+        if (salaryProjection.targetStatus === 'healthy-margin') {
+            return { label: 'Healthy margin', variant: 'default' as const, className: 'bg-emerald-600 hover:bg-emerald-600' };
+        }
+        if (salaryProjection.targetStatus === 'meets-target') {
+            return { label: 'Meets target', variant: 'outline' as const, className: 'border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300' };
+        }
+        if (salaryProjection.targetStatus === 'below-target') {
+            return { label: 'Below target', variant: 'destructive' as const, className: '' };
+        }
+        return { label: 'No plan yet', variant: 'secondary' as const, className: '' };
+    }, [salaryProjection.targetStatus]);
+
 
     const scheduledCountPerStyleVariantOp = useMemo(() => {
         const counts: Record<string, number> = {};
@@ -3408,6 +3447,82 @@ export function AIProductionPlanner(): React.ReactNode {
                         <div className="p-3 border rounded-md bg-background">
                             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Schedule Adherence</div>
                             <div className="text-lg font-semibold">{planningKpis.scheduleAdherence.toFixed(0)}%</div>
+                        </div>
+                    </div>
+
+                    <div className="rounded-md border bg-background p-4 space-y-4">
+                        <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                            <div>
+                                <h4 className="text-sm font-semibold flex items-center gap-2">
+                                    <PackageCheck className="h-4 w-4 text-emerald-600" />
+                                    Salary Target Coverage
+                                </h4>
+                                <p className="text-xs text-muted-foreground">
+                                    {activePlanningOperatorIds.length} operator{activePlanningOperatorIds.length === 1 ? '' : 's'} plus {salarySettings.helperCount} helper{salarySettings.helperCount === 1 ? '' : 's'} and {salarySettings.cutterCount} cutter{salarySettings.cutterCount === 1 ? '' : 's'}.
+                                </p>
+                            </div>
+                            <Badge variant={salaryTargetBadge.variant} className={`w-fit ${salaryTargetBadge.className}`}>
+                                {salaryTargetBadge.label}
+                            </Badge>
+                        </div>
+
+                        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                            <div className="rounded-md border bg-muted/20 p-3">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Monthly Labor</div>
+                                <div className="text-lg font-semibold">{formatLkr(salaryProjection.monthlyLaborCostLKR)}</div>
+                            </div>
+                            <div className="rounded-md border bg-muted/20 p-3">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Break-even</div>
+                                <div className="text-lg font-semibold">{salaryProjection.dailyDressTarget} pcs/day</div>
+                                <div className="text-[11px] text-muted-foreground">{salaryProjection.monthlyDressTarget} pcs/month</div>
+                            </div>
+                            <div className="rounded-md border bg-muted/20 p-3">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Per Operator</div>
+                                <div className="text-lg font-semibold">{salaryProjection.dressesPerOperatorPerDay.toFixed(1)} pcs/day</div>
+                                <div className="text-[11px] text-muted-foreground">{salarySettings.workingDaysPerMonth} working days</div>
+                            </div>
+                            <div className="rounded-md border bg-muted/20 p-3">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">SMV Target</div>
+                                <div className="text-lg font-semibold">{salaryProjection.targetSmvAtPlanningEfficiency.toFixed(1)} min</div>
+                                <div className="text-[11px] text-muted-foreground">avg plan {salarySettings.averageSmvPerDress} min at {salarySettings.planningEfficiencyPercent}%</div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                            <div className="rounded-md border p-3">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Current Plan</div>
+                                <div className="text-xl font-semibold">{salaryProjection.plannedDailyOutput} pcs/day</div>
+                                <div className={`text-[11px] ${salaryProjection.plannedSurplusDressesPerDay >= 0 ? 'text-emerald-700 dark:text-emerald-300' : 'text-destructive'}`}>
+                                    {salaryProjection.plannedSurplusDressesPerDay >= 0 ? '+' : ''}{salaryProjection.plannedSurplusDressesPerDay} pcs/day vs break-even
+                                </div>
+                            </div>
+                            <div className="rounded-md border p-3">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Monthly Value</div>
+                                <div className="text-xl font-semibold">{formatLkr(salaryProjection.plannedMonthlyValueLKR)}</div>
+                                <div className="text-[11px] text-muted-foreground">{formatLkr(salarySettings.laborValuePerDressLKR)} per finished dress</div>
+                            </div>
+                            <div className="rounded-md border p-3">
+                                <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Operator Package</div>
+                                <div className="text-xl font-semibold">{formatLkr(salarySettings.operatorBaseSalaryLKR + salarySettings.attendanceBonusLKR)}</div>
+                                <div className="text-[11px] text-muted-foreground">
+                                    Base {formatLkr(salarySettings.operatorBaseSalaryLKR)} + attendance {formatLkr(salarySettings.attendanceBonusLKR)}
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 text-xs">
+                            <div className="rounded-md bg-muted/30 p-3">
+                                <div className="font-medium">Attendance</div>
+                                <div className="text-muted-foreground">Full bonus up to {salarySettings.attendanceGraceMinutes} min late grace.</div>
+                            </div>
+                            <div className="rounded-md bg-muted/30 p-3">
+                                <div className="font-medium">Team Bonus</div>
+                                <div className="text-muted-foreground">Projected {formatLkr(salaryProjection.teamBonusPerOperatorLKR)} / operator, capped at {formatLkr(salarySettings.teamProductionBonusCapLKR)}.</div>
+                            </div>
+                            <div className="rounded-md bg-muted/30 p-3">
+                                <div className="font-medium">Best Operator Bonus</div>
+                                <div className="text-muted-foreground">Reserve up to {formatLkr(salarySettings.individualPerformanceBonusCapLKR)} for quality, attendance, and skill flexibility.</div>
+                            </div>
                         </div>
                     </div>
 

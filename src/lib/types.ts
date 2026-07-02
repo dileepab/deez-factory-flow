@@ -15,6 +15,17 @@ export interface Configuration {
     availableMinutesPerDay: number;
     attendanceBonusLKR: number;
     minuteValueLKR: number;
+    operatorBaseSalaryLKR?: number;
+    helperMonthlySalaryLKR?: number;
+    helperCount?: number;
+    cutterMonthlySalaryLKR?: number;
+    cutterCount?: number;
+    laborValuePerDressLKR?: number;
+    averageSmvPerDress?: number;
+    planningEfficiencyPercent?: number;
+    teamProductionBonusCapLKR?: number;
+    individualPerformanceBonusCapLKR?: number;
+    attendanceGraceMinutes?: number;
     holidays: string[]; // Array of dates in 'YYYY-MM-DD' format
     defaultSwitchDelay?: number; // Default delay in minutes when switching tasks/machines
     machineCounts?: Record<string, number>; // Inventory count per machine type

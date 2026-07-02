@@ -23,6 +23,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { Badge } from "@/components/ui/badge"
+import { getFactorySalarySettings } from '@/lib/factory-salary';
 
 export function ConfigurationManagement() {
   const { data: config, isLoading: isConfigLoading, error } = useConfiguration();
@@ -35,7 +36,25 @@ export function ConfigurationManagement() {
 
   useEffect(() => {
     if (config) {
-      setFormData(config);
+      const salarySettings = getFactorySalarySettings(config);
+      setFormData({
+        ...config,
+        targetSalaryLKR: salarySettings.operatorTargetSalaryLKR,
+        workingDaysPerMonth: salarySettings.workingDaysPerMonth,
+        availableMinutesPerDay: salarySettings.availableMinutesPerDay,
+        attendanceBonusLKR: salarySettings.attendanceBonusLKR,
+        operatorBaseSalaryLKR: salarySettings.operatorBaseSalaryLKR,
+        helperMonthlySalaryLKR: salarySettings.helperMonthlySalaryLKR,
+        helperCount: salarySettings.helperCount,
+        cutterMonthlySalaryLKR: salarySettings.cutterMonthlySalaryLKR,
+        cutterCount: salarySettings.cutterCount,
+        laborValuePerDressLKR: salarySettings.laborValuePerDressLKR,
+        averageSmvPerDress: salarySettings.averageSmvPerDress,
+        planningEfficiencyPercent: salarySettings.planningEfficiencyPercent,
+        teamProductionBonusCapLKR: salarySettings.teamProductionBonusCapLKR,
+        individualPerformanceBonusCapLKR: salarySettings.individualPerformanceBonusCapLKR,
+        attendanceGraceMinutes: salarySettings.attendanceGraceMinutes,
+      });
     }
   }, [config]);
 
@@ -128,16 +147,8 @@ export function ConfigurationManagement() {
             <Input id="minuteValueLKR" type="number" value={formData.minuteValueLKR || ''} onChange={handleInputChange} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="attendanceBonusLKR">Attendance Bonus (LKR)</Label>
-            <Input id="attendanceBonusLKR" type="number" value={formData.attendanceBonusLKR || ''} onChange={handleInputChange} />
-          </div>
-          <div className="space-y-2">
             <Label htmlFor="availableMinutesPerDay">Available Minutes per Day</Label>
             <Input id="availableMinutesPerDay" type="number" value={formData.availableMinutesPerDay || ''} onChange={handleInputChange} />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="targetSalaryLKR">Target Salary (LKR)</Label>
-            <Input id="targetSalaryLKR" type="number" value={formData.targetSalaryLKR || ''} onChange={handleInputChange} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="defaultSwitchDelay">Default Switch Delay (mins)</Label>
@@ -148,6 +159,71 @@ export function ConfigurationManagement() {
               onChange={handleInputChange}
               placeholder="Default: 2"
             />
+          </div>
+        </div>
+
+        <div className="space-y-4 pt-6 border-t">
+          <div className="space-y-1">
+            <h3 className="text-lg font-medium">Factory Salary Planning</h3>
+            <p className="text-sm text-muted-foreground">Monthly labor targets, attendance bonus, and dress-value assumptions for production planning.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="space-y-2">
+              <Label htmlFor="workingDaysPerMonth">Working Days / Month</Label>
+              <Input id="workingDaysPerMonth" type="number" value={formData.workingDaysPerMonth || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="targetSalaryLKR">Operator Target Salary (LKR)</Label>
+              <Input id="targetSalaryLKR" type="number" value={formData.targetSalaryLKR || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="operatorBaseSalaryLKR">Operator Base Salary (LKR)</Label>
+              <Input id="operatorBaseSalaryLKR" type="number" value={formData.operatorBaseSalaryLKR || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="attendanceBonusLKR">Attendance Bonus (LKR)</Label>
+              <Input id="attendanceBonusLKR" type="number" value={formData.attendanceBonusLKR || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="attendanceGraceMinutes">Late Grace (min)</Label>
+              <Input id="attendanceGraceMinutes" type="number" value={formData.attendanceGraceMinutes || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="laborValuePerDressLKR">Labor Value / Dress (LKR)</Label>
+              <Input id="laborValuePerDressLKR" type="number" value={formData.laborValuePerDressLKR || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="helperMonthlySalaryLKR">Helper Salary (LKR)</Label>
+              <Input id="helperMonthlySalaryLKR" type="number" value={formData.helperMonthlySalaryLKR || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="helperCount">Helpers</Label>
+              <Input id="helperCount" type="number" value={formData.helperCount ?? ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cutterMonthlySalaryLKR">Cutter Salary (LKR)</Label>
+              <Input id="cutterMonthlySalaryLKR" type="number" value={formData.cutterMonthlySalaryLKR || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="cutterCount">Cutters</Label>
+              <Input id="cutterCount" type="number" value={formData.cutterCount ?? ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="averageSmvPerDress">Average SMV / Dress</Label>
+              <Input id="averageSmvPerDress" type="number" value={formData.averageSmvPerDress || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="planningEfficiencyPercent">Planning Efficiency (%)</Label>
+              <Input id="planningEfficiencyPercent" type="number" value={formData.planningEfficiencyPercent || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="teamProductionBonusCapLKR">Team Bonus Cap / Operator (LKR)</Label>
+              <Input id="teamProductionBonusCapLKR" type="number" value={formData.teamProductionBonusCapLKR || ''} onChange={handleInputChange} />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="individualPerformanceBonusCapLKR">Individual Bonus Cap (LKR)</Label>
+              <Input id="individualPerformanceBonusCapLKR" type="number" value={formData.individualPerformanceBonusCapLKR || ''} onChange={handleInputChange} />
+            </div>
           </div>
         </div>
         <div className="space-y-3">
