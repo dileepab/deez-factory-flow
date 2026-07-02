@@ -516,6 +516,22 @@ export const buildAssignmentsFromUnits = (units: AssignmentUnit[]): Assignment[]
     }));
 };
 
+export const buildEffectiveAssignments = (
+    baseAssignments: Assignment[],
+    scopedAssignments: Record<string, Assignment[]>
+): Assignment[] => {
+    const scopedList = Object.values(scopedAssignments).flat();
+    if (scopedList.length === 0) {
+        return buildAssignmentsFromUnits(flattenAssignmentUnits(baseAssignments));
+    }
+
+    const scopedOperationIds = new Set(scopedList.map(assignment => assignment.operationId));
+    return buildAssignmentsFromUnits(flattenAssignmentUnits([
+        ...baseAssignments.filter(assignment => !scopedOperationIds.has(assignment.operationId)),
+        ...scopedList,
+    ]));
+};
+
 type MachineLayoutPlan = {
     styleScope: PlannerScope;
     styleLabel: string;
@@ -1821,14 +1837,22 @@ export function AIProductionPlanner(): React.ReactNode {
         return assignment.operatorIds.map(id => operators.find(o => o.id === id)).filter(Boolean) as Operator[];
     };
 
+    const effectivePrimaryAssignments = useMemo(
+        () => buildEffectiveAssignments(assignments, variantAssignments),
+        [assignments, variantAssignments]
+    );
+
+    const effectiveNextAssignments = useMemo(
+        () => buildEffectiveAssignments(nextAssignments, nextVariantAssignments),
+        [nextAssignments, nextVariantAssignments]
+    );
+
     const allPlannerAssignments = useMemo(() => {
         return [
-            ...assignments,
-            ...Object.values(variantAssignments).flat(),
-            ...nextAssignments,
-            ...Object.values(nextVariantAssignments).flat()
+            ...effectivePrimaryAssignments,
+            ...effectiveNextAssignments,
         ];
-    }, [assignments, variantAssignments, nextAssignments, nextVariantAssignments]);
+    }, [effectivePrimaryAssignments, effectiveNextAssignments]);
 
     const handlePublishSchedule = async () => {
         if (!simResult || !simResult.schedule) return;
@@ -2861,20 +2885,13 @@ export function AIProductionPlanner(): React.ReactNode {
 
     const machineLayoutGraph = useMemo(() => {
         const plans: MachineLayoutPlan[] = [];
-        const collapseAssignments = (
-            baseAssignments: Assignment[],
-            scopedAssignments: Record<string, Assignment[]>
-        ) => buildAssignmentsFromUnits(flattenAssignmentUnits([
-            ...baseAssignments,
-            ...Object.values(scopedAssignments).flat(),
-        ]));
 
         if (selectedStyle && hasAnyScopedAssignments(assignments, variantAssignments)) {
             plans.push({
                 styleScope: 'primary',
                 styleLabel: 'Current Style',
                 style: selectedStyle,
-                assignments: collapseAssignments(assignments, variantAssignments),
+                assignments: effectivePrimaryAssignments,
             });
         }
 
@@ -2883,7 +2900,7 @@ export function AIProductionPlanner(): React.ReactNode {
                 styleScope: 'next',
                 styleLabel: 'Next Style',
                 style: selectedNextStyle,
-                assignments: collapseAssignments(nextAssignments, nextVariantAssignments),
+                assignments: effectiveNextAssignments,
             });
         }
 
@@ -2895,6 +2912,8 @@ export function AIProductionPlanner(): React.ReactNode {
         variantAssignments,
         nextAssignments,
         nextVariantAssignments,
+        effectivePrimaryAssignments,
+        effectiveNextAssignments,
         operators,
         scheduledCountPerRootStyleOp,
         hasAnyScopedAssignments,
@@ -3027,7 +3046,7 @@ export function AIProductionPlanner(): React.ReactNode {
         // Group by Operator (Merge both styles)
         const opMap = new Map<string, { opId: string, style: 'primary' | 'next' }[]>();
 
-        assignments.forEach(a => {
+        effectivePrimaryAssignments.forEach(a => {
             a.operatorIds.forEach(uid => {
                 const list = opMap.get(uid) || [];
                 list.push({ opId: a.operationId, style: 'primary' });
@@ -3035,7 +3054,7 @@ export function AIProductionPlanner(): React.ReactNode {
             });
         });
 
-        nextAssignments.forEach(a => {
+        effectiveNextAssignments.forEach(a => {
             a.operatorIds.forEach(uid => {
                 const list = opMap.get(uid) || [];
                 // Avoid duplicates if any (unlikely but safe)
@@ -3114,7 +3133,7 @@ export function AIProductionPlanner(): React.ReactNode {
         });
 
         return list.sort((a, b) => b.type.localeCompare(a.type));
-    }, [assignments, nextAssignments, selectedStyle, selectedNextStyle, operators, flowMetrics, nextFlowMetrics]);
+    }, [effectivePrimaryAssignments, effectiveNextAssignments, selectedStyle, selectedNextStyle, operators, flowMetrics, nextFlowMetrics]);
 
     const optimizationRecommendations = useMemo(() => {
         if (!selectedStyle || assignments.length === 0) return [];

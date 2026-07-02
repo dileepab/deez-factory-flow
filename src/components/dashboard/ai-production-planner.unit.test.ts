@@ -12,6 +12,7 @@ import {
     assessNextStyleFlow,
     assessRebalanceCandidate,
     buildAssignmentsFromUnits,
+    buildEffectiveAssignments,
     buildMachineFlowElements,
     buildMachineLayoutGraph,
     buildMachineRelationalLayout,
@@ -108,6 +109,28 @@ describe('ai-production-planner next-style flow guard', () => {
         expect(buildAssignmentsFromUnits(units)).toEqual([
             { operationId: 'pocket', operatorIds: ['saman', 'ruvini'] },
             { operationId: 'fly', operatorIds: ['pushpa'] },
+        ]);
+    });
+
+    it('lets scoped variant assignments override stale base operators in summaries', () => {
+        const effective = buildEffectiveAssignments(
+            [
+                { operationId: 'shoulder', operatorIds: ['saman'] },
+                { operationId: 'buttonhole', operatorIds: ['saman'] },
+            ],
+            {
+                navy: [
+                    { operationId: 'buttonhole', operatorIds: ['nilushi'], variantId: 'navy', variantColor: 'Solid Navy' },
+                ],
+                black: [
+                    { operationId: 'buttonhole', operatorIds: ['nilushi'], variantId: 'black', variantColor: 'Black' },
+                ],
+            }
+        );
+
+        expect(effective).toEqual([
+            { operationId: 'shoulder', operatorIds: ['saman'] },
+            { operationId: 'buttonhole', operatorIds: ['nilushi'] },
         ]);
     });
 
