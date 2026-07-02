@@ -826,52 +826,18 @@ const sortOperationsByDependency = (operations: GarmentStyle['operations']) => {
     return ordered;
 };
 
-const terminalContinuationBlockPattern = /\b(?:hem|button|buttonhole|pack|packing|finish|finishing|inspect|inspection|press|ironing|label|tag)\b/i;
-const terminalContinuationHintPattern = /\b(?:attach|join|seam|collar|placket|neck|sleeve|waistband|binding|tape|topstitch|pocket|zipper|fly|inseam|outseam)\b/i;
-
-const shouldInferAssemblyContinuation = (operation: GarmentStyle['operations'][number]) => {
-    const name = operation.name || '';
-    if (terminalContinuationBlockPattern.test(name)) return false;
-    return terminalContinuationHintPattern.test(name);
-};
-
-function buildDisplayDependencyGraph(orderedOperations: GarmentStyle['operations']) {
-    const dependenciesByOperation = new Map<string, string[]>();
-    const successorsByOperation = new Map<string, string[]>();
-    const inferredContinuations = new Set<string>();
-    const operationIds = new Set(orderedOperations.map(operation => operation.id));
-
-    orderedOperations.forEach(operation => {
-        const dependencies = unique((operation.dependencies || []).filter(dependencyId => operationIds.has(dependencyId)));
-        dependenciesByOperation.set(operation.id, dependencies);
-        dependencies.forEach(dependencyId => {
-            successorsByOperation.set(
-                dependencyId,
-                unique([...(successorsByOperation.get(dependencyId) || []), operation.id])
-            );
-        });
-    });
+function buildPrimaryFlowPath(orderedOperations: GarmentStyle['operations']) {
+    const previousByOperation = new Map<string, string[]>();
+    const nextByOperation = new Map<string, string[]>();
 
     orderedOperations.forEach((operation, index) => {
-        if ((successorsByOperation.get(operation.id)?.length || 0) > 0) return;
-        if (index >= orderedOperations.length - 1) return;
-        if (!shouldInferAssemblyContinuation(operation)) return;
-
-        const target = orderedOperations.slice(index + 1).find(candidate => candidate.id !== operation.id);
-        if (!target) return;
-
-        dependenciesByOperation.set(
-            target.id,
-            unique([...(dependenciesByOperation.get(target.id) || []), operation.id])
-        );
-        successorsByOperation.set(
-            operation.id,
-            unique([...(successorsByOperation.get(operation.id) || []), target.id])
-        );
-        inferredContinuations.add(`${operation.id}->${target.id}`);
+        const previousOperation = orderedOperations[index - 1];
+        const nextOperation = orderedOperations[index + 1];
+        previousByOperation.set(operation.id, previousOperation ? [previousOperation.id] : []);
+        nextByOperation.set(operation.id, nextOperation ? [nextOperation.id] : []);
     });
 
-    return { dependenciesByOperation, successorsByOperation, inferredContinuations };
+    return { previousByOperation, nextByOperation };
 }
 
 export function buildMachineLayoutGraph(
@@ -887,11 +853,7 @@ export function buildMachineLayoutGraph(
     plans.forEach(plan => {
         const orderedOperations = sortOperationsByDependency(plan.style.operations);
         const operationNameById = new Map(plan.style.operations.map(operation => [operation.id, operation.name]));
-        const {
-            dependenciesByOperation,
-            successorsByOperation,
-            inferredContinuations,
-        } = buildDisplayDependencyGraph(orderedOperations);
+        const { previousByOperation, nextByOperation } = buildPrimaryFlowPath(orderedOperations);
         const stationIdByOperation = new Map(
             plan.style.operations.map(operation => [
                 operation.id,
@@ -909,8 +871,8 @@ export function buildMachineLayoutGraph(
 
         orderedOperations.forEach(operation => {
             const operatorIds = assignmentByOperation.get(operation.id) || [];
-            const successorIds = successorsByOperation.get(operation.id) || [];
-            const dependencies = dependenciesByOperation.get(operation.id) || [];
+            const successorIds = nextByOperation.get(operation.id) || [];
+            const previousIds = previousByOperation.get(operation.id) || [];
             const station: MachineLayoutStation = {
                 id: stationIdByOperation.get(operation.id)!,
                 sequence: stations.length,
@@ -922,15 +884,15 @@ export function buildMachineLayoutGraph(
                 machineType: operation.machineType,
                 operatorIds,
                 operatorNames: operatorIds.map(operatorId => operatorById.get(operatorId)?.name || 'Unassigned operator'),
-                inputLabels: dependencies.length > 0
-                    ? dependencies.map(dependencyId => operationNameById.get(dependencyId) || dependencyId)
+                inputLabels: previousIds.length > 0
+                    ? previousIds.map(previousId => operationNameById.get(previousId) || previousId)
                     : ['New parts'],
                 outputLabels: successorIds.length > 0
                     ? successorIds.map(successorId => operationNameById.get(successorId) || successorId)
                     : ['Finished pieces'],
                 scheduledCount: Math.floor(scheduledCountsByStyleOp[buildRootStyleOpKey(plan.style.id, operation.id)] || 0),
                 completedCount: Math.floor(operation.completedQuantity || 0),
-                isStart: dependencies.length === 0,
+                isStart: previousIds.length === 0,
                 isFinal: successorIds.length === 0,
             };
 
@@ -941,7 +903,7 @@ export function buildMachineLayoutGraph(
                 operatorStations.set(operatorId, list);
             });
 
-            if (dependencies.length === 0) {
+            if (previousIds.length === 0) {
                 partLinks.push({
                     id: `${station.id}-new-parts`,
                     styleScope: plan.styleScope,
@@ -951,17 +913,16 @@ export function buildMachineLayoutGraph(
                 });
             }
 
-            dependencies.forEach(dependencyId => {
-                const fromStationId = stationIdByOperation.get(dependencyId);
+            previousIds.forEach(previousId => {
+                const fromStationId = stationIdByOperation.get(previousId);
                 if (!fromStationId) return;
-                const isInferred = inferredContinuations.has(`${dependencyId}->${operation.id}`);
                 partLinks.push({
                     id: `${fromStationId}-${station.id}`,
                     styleScope: plan.styleScope,
                     fromStationId,
                     toStationId: station.id,
-                    label: isInferred ? 'Inferred continuation' : 'Completed parts',
-                    kind: isInferred ? 'inferred-continuation' : 'completed-parts',
+                    label: 'Completed parts',
+                    kind: 'completed-parts',
                 });
             });
         });
@@ -2956,6 +2917,10 @@ export function AIProductionPlanner(): React.ReactNode {
         [machineLayoutGraph]
     );
     const [machineFlowNodes, setMachineFlowNodes, onMachineFlowNodesChange] = useNodesState<MachineFlowNode>(machineFlowElements.nodes);
+    const hasInferredMachineFlowEdges = useMemo(
+        () => machineFlowElements.edges.some(edge => edge.data?.kind === 'inferred-continuation'),
+        [machineFlowElements.edges]
+    );
 
     useEffect(() => {
         setMachineFlowNodes(machineFlowElements.nodes);
@@ -3825,10 +3790,12 @@ export function AIProductionPlanner(): React.ReactNode {
                                                     <span className="h-1 w-9 rounded-full border-t-2 border-dashed border-lime-500" />
                                                     New parts
                                                 </span>
-                                                <span className="inline-flex items-center gap-1.5">
-                                                    <span className="h-1 w-9 rounded-full border-t-2 border-dashed border-amber-500" />
-                                                    Inferred continuation
-                                                </span>
+                                                {hasInferredMachineFlowEdges && (
+                                                    <span className="inline-flex items-center gap-1.5">
+                                                        <span className="h-1 w-9 rounded-full border-t-2 border-dashed border-amber-500" />
+                                                        Inferred continuation
+                                                    </span>
+                                                )}
                                                 <span className="inline-flex items-center gap-1.5">
                                                     <span className="h-1 w-9 rounded-full border-t-2 border-dashed border-indigo-500" />
                                                     Operator route
