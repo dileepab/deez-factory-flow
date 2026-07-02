@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AI_RETRY_EXHAUSTED_MESSAGE,
   getRetryableAiErrorMessage,
+  isGeminiQuotaExceededError,
   isRetryableGeminiError,
   runWithGeminiRetry,
 } from './gemini-retry';
@@ -59,5 +60,11 @@ describe('gemini retry helper', () => {
     expect(isRetryableGeminiError(new Error('This model is currently experiencing high demand.'))).toBe(true);
     expect(isRetryableGeminiError(new Error('The service is overloaded, please try again later.'))).toBe(true);
     expect(getRetryableAiErrorMessage(new Error('UNAVAILABLE'))).toBe(AI_RETRY_EXHAUSTED_MESSAGE);
+  });
+
+  it('recognizes hard quota exhaustion separately from generic retryable errors', () => {
+    expect(isGeminiQuotaExceededError(new Error('You exceeded your current quota.'))).toBe(true);
+    expect(isGeminiQuotaExceededError(new Error('Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests'))).toBe(true);
+    expect(isGeminiQuotaExceededError(new Error('This model is currently experiencing high demand.'))).toBe(false);
   });
 });

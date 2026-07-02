@@ -1,3 +1,5 @@
+@import "@xyflow/react/dist/style.css";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -72,6 +74,25 @@
   body {
     @apply bg-background text-foreground overflow-x-hidden;
     /* touch-action: manipulation; -- allows scrolling/panning but disables double-tap zoom */
+  }
+}
+
+@layer components {
+  .machine-flow-map .react-flow__pane {
+    cursor: grab;
+  }
+
+  .machine-flow-map .react-flow__pane:active {
+    cursor: grabbing;
+  }
+
+  .machine-flow-map .react-flow__controls,
+  .machine-flow-map .react-flow__minimap {
+    @apply overflow-hidden rounded-md border border-border bg-background shadow-sm;
+  }
+
+  .machine-flow-map .react-flow__controls-button {
+    @apply border-border bg-background text-foreground;
   }
 }
 

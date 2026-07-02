@@ -12,7 +12,9 @@ import {
     assessNextStyleFlow,
     assessRebalanceCandidate,
     buildAssignmentsFromUnits,
+    buildMachineFlowElements,
     buildMachineLayoutGraph,
+    buildMachineRelationalLayout,
     findSafeNextStylePlan,
     flattenAssignmentUnits,
     getNextStylePrimaryDropLimit,
@@ -255,5 +257,131 @@ describe('ai-production-planner next-style flow guard', () => {
             stationLabels: ['Side Seam', 'Packing'],
             movementCount: 1,
         });
+
+        const visual = buildMachineRelationalLayout(graph);
+        expect(visual.nodes.map(node => ({
+            id: node.id,
+            depth: node.depth,
+            x: node.x,
+        }))).toEqual([
+            { id: 'primary-style-1-cut', depth: 0, x: 240 },
+            { id: 'primary-style-1-sew', depth: 1, x: 640 },
+            { id: 'primary-style-1-pack', depth: 2, x: 1040 },
+        ]);
+        expect(visual.partLinks.map(link => link.kind)).toEqual([
+            'new-parts',
+            'completed-parts',
+            'completed-parts',
+        ]);
+        expect(visual.operatorLinks).toHaveLength(2);
+        expect(visual.operatorLinks[0]).toMatchObject({
+            operatorId: 'op-a',
+            fromStationId: 'primary-style-1-cut',
+            toStationId: 'primary-style-1-sew',
+        });
+
+        const flow = buildMachineFlowElements(graph);
+        expect(flow.nodes).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                id: 'primary-style-1-cut-new-parts-source',
+                type: 'partSource',
+                data: expect.objectContaining({ label: 'New parts' }),
+            }),
+            expect.objectContaining({
+                id: 'primary-style-1-cut',
+                type: 'machineStation',
+                data: expect.objectContaining({ label: 'Cut Panels' }),
+            }),
+        ]));
+        expect(flow.edges).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                source: 'primary-style-1-cut-new-parts-source',
+                target: 'primary-style-1-cut',
+                data: expect.objectContaining({ kind: 'new-parts', label: 'New parts' }),
+            }),
+            expect.objectContaining({
+                source: 'primary-style-1-cut',
+                target: 'primary-style-1-sew',
+                data: expect.objectContaining({ kind: 'completed-parts', label: 'Completed parts' }),
+            }),
+            expect.objectContaining({
+                source: 'primary-style-1-cut',
+                target: 'primary-style-1-sew',
+                data: expect.objectContaining({ kind: 'operator-route', label: 'Nimali' }),
+            }),
+        ]));
+    });
+
+    it('shows inferred continuation when an early assembly operation has no explicit successor', () => {
+        const style: GarmentStyle = {
+            id: 'polo',
+            name: 'Polo',
+            buyer: 'DEEZ',
+            totalSmv: 8,
+            quantity: 100,
+            status: 'active',
+            startDate: '2026-07-01',
+            operations: [
+                { id: 'shoulder', name: 'Shoulder Join', smv: 36, machineType: 'Overlock/Serger', dependencies: [], completedQuantity: 0 },
+                { id: 'placket', name: 'Placket Attach', smv: 108, machineType: 'Single Needle Lockstitch', dependencies: [], completedQuantity: 0 },
+                { id: 'collar', name: 'Collar Attach', smv: 84, machineType: 'Single Needle Lockstitch', dependencies: ['shoulder', 'placket'], completedQuantity: 0 },
+                { id: 'sleeve', name: 'Sleeve Attach', smv: 72, machineType: 'Overlock/Serger', dependencies: ['shoulder'], completedQuantity: 0 },
+                { id: 'side', name: 'Side Seam', smv: 66, machineType: 'Overlock/Serger', dependencies: ['sleeve'], completedQuantity: 0 },
+                { id: 'hem', name: 'Bottom Hem', smv: 60, machineType: 'Flatlock/Coverstitch', dependencies: ['side'], completedQuantity: 0 },
+            ],
+        };
+        const operators = [
+            { id: 'op-a', name: 'Nimali', role: 'operator', email: 'nimali@example.com', skills: [] },
+        ] as Operator[];
+        const assignments = style.operations.map(operation => ({
+            operationId: operation.id,
+            operatorIds: ['op-a'],
+        }));
+
+        const graph = buildMachineLayoutGraph(
+            [{ styleScope: 'primary', styleLabel: 'Current Style', style, assignments }],
+            operators,
+            {}
+        );
+
+        const collar = graph.stations.find(station => station.operationId === 'collar');
+        const sleeve = graph.stations.find(station => station.operationId === 'sleeve');
+
+        expect(collar).toMatchObject({
+            isFinal: false,
+            outputLabels: ['Sleeve Attach'],
+        });
+        expect(sleeve?.inputLabels).toEqual(['Shoulder Join', 'Collar Attach']);
+        expect(graph.partLinks).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                fromStationId: 'primary-polo-collar',
+                toStationId: 'primary-polo-sleeve',
+                kind: 'inferred-continuation',
+                label: 'Inferred continuation',
+            }),
+            expect.objectContaining({
+                fromStationId: 'primary-polo-shoulder',
+                toStationId: 'primary-polo-collar',
+                kind: 'completed-parts',
+            }),
+            expect.objectContaining({
+                fromStationId: 'primary-polo-placket',
+                toStationId: 'primary-polo-collar',
+                kind: 'completed-parts',
+            }),
+        ]));
+
+        const flow = buildMachineFlowElements(graph);
+        expect(flow.edges).toEqual(expect.arrayContaining([
+            expect.objectContaining({
+                source: 'primary-polo-collar',
+                target: 'primary-polo-sleeve',
+                data: expect.objectContaining({
+                    kind: 'inferred-continuation',
+                    label: 'Inferred continuation',
+                    color: '#f59e0b',
+                }),
+            }),
+        ]));
     });
 });

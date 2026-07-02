@@ -2,6 +2,22 @@
 
 import { useState, useMemo, useEffect, useCallback } from 'react';
 import {
+    Background,
+    BaseEdge,
+    Controls,
+    EdgeLabelRenderer,
+    Handle,
+    MarkerType,
+    MiniMap,
+    Position,
+    ReactFlow,
+    getBezierPath,
+    type Edge,
+    type EdgeProps,
+    type Node,
+    type NodeProps,
+} from '@xyflow/react';
+import {
     Card,
     CardContent,
     CardDescription,
@@ -531,6 +547,7 @@ export type MachineLayoutPartLink = {
     fromStationId?: string;
     toStationId: string;
     label: string;
+    kind: 'new-parts' | 'completed-parts' | 'inferred-continuation';
 };
 
 export type MachineLayoutOperatorMovement = {
@@ -548,6 +565,235 @@ export type MachineLayoutGraph = {
     partLinks: MachineLayoutPartLink[];
     operatorMovements: MachineLayoutOperatorMovement[];
 };
+
+export type MachineLayoutVisualNode = MachineLayoutStation & {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    depth: number;
+};
+
+export type MachineLayoutVisualLink = {
+    id: string;
+    label: string;
+    path: string;
+    fromStationId?: string;
+    toStationId: string;
+    kind: 'new-parts' | 'completed-parts' | 'inferred-continuation';
+};
+
+export type MachineLayoutVisualOperatorLink = {
+    id: string;
+    operatorId: string;
+    operatorName: string;
+    fromStationId: string;
+    toStationId: string;
+    path: string;
+    color: string;
+};
+
+export type MachineLayoutVisual = {
+    width: number;
+    height: number;
+    nodes: MachineLayoutVisualNode[];
+    partLinks: MachineLayoutVisualLink[];
+    operatorLinks: MachineLayoutVisualOperatorLink[];
+};
+
+type MachineFlowNodeData = {
+    kind: 'station' | 'source';
+    station?: MachineLayoutVisualNode;
+    label: string;
+    subtitle?: string;
+    countLabel?: string;
+    styleScope: PlannerScope;
+};
+
+type MachineFlowEdgeData = {
+    kind: 'completed-parts' | 'new-parts' | 'inferred-continuation' | 'operator-route';
+    label: string;
+    color: string;
+};
+
+export type MachineFlowNode = Node<MachineFlowNodeData, 'machineStation' | 'partSource'>;
+export type MachineFlowEdge = Edge<MachineFlowEdgeData, 'machineFlow'>;
+
+export type MachineFlowElements = {
+    width: number;
+    height: number;
+    nodes: MachineFlowNode[];
+    edges: MachineFlowEdge[];
+};
+
+const machineFlowNodeTypes = {
+    machineStation: MachineStationFlowNode,
+    partSource: PartSourceFlowNode,
+};
+
+const machineFlowEdgeTypes = {
+    machineFlow: MachineFlowEdgeComponent,
+};
+
+function MachineStationFlowNode({ data }: NodeProps<MachineFlowNode>) {
+    const station = data.station;
+    if (!station) return null;
+
+    return (
+        <div className={`w-[260px] rounded-md border bg-background p-3 shadow-sm ${
+            station.styleScope === 'next'
+                ? 'border-blue-300 dark:border-blue-800'
+                : station.isFinal
+                    ? 'border-emerald-300 dark:border-emerald-800'
+                    : 'border-border'
+        }`}>
+            <Handle
+                id="parts-in"
+                type="target"
+                position={Position.Left}
+                className="!h-3 !w-3 !border-2 !border-background !bg-emerald-500"
+            />
+            <Handle
+                id="operator-in"
+                type="target"
+                position={Position.Top}
+                className="!h-3 !w-3 !border-2 !border-background !bg-indigo-500"
+            />
+            <Handle
+                id="parts-out"
+                type="source"
+                position={Position.Right}
+                className="!h-3 !w-3 !border-2 !border-background !bg-emerald-500"
+            />
+            <Handle
+                id="operator-out"
+                type="source"
+                position={Position.Bottom}
+                className="!h-3 !w-3 !border-2 !border-background !bg-indigo-500"
+            />
+
+            <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                    <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {station.styleLabel}
+                    </div>
+                    <div className="truncate text-sm font-semibold" title={station.operationName}>
+                        {station.operationName}
+                    </div>
+                </div>
+                <Badge variant={station.isFinal ? 'default' : 'outline'} className="shrink-0 text-[10px]">
+                    {station.isFinal ? 'Finish' : `Step ${station.depth + 1}`}
+                </Badge>
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-1">
+                <Badge variant="outline" className="max-w-[156px] truncate text-[10px]" title={station.machineType}>
+                    {station.machineType}
+                </Badge>
+                <Badge variant="secondary" className="text-[10px]">
+                    {station.scheduledCount} pcs
+                </Badge>
+            </div>
+
+            <div className="mt-2 flex flex-wrap gap-1">
+                {station.operatorNames.length > 0 ? station.operatorNames.slice(0, 3).map(name => (
+                    <Badge key={`${station.id}-flow-${name}`} variant="secondary" className="max-w-[112px] truncate text-[10px]" title={name}>
+                        {name}
+                    </Badge>
+                )) : (
+                    <Badge variant="destructive" className="text-[10px]">
+                        Unassigned
+                    </Badge>
+                )}
+                {station.operatorNames.length > 3 && (
+                    <Badge variant="outline" className="text-[10px]">
+                        +{station.operatorNames.length - 3}
+                    </Badge>
+                )}
+            </div>
+        </div>
+    );
+}
+
+function PartSourceFlowNode({ data }: NodeProps<MachineFlowNode>) {
+    return (
+        <div className="w-[132px] rounded-md border border-lime-300 bg-lime-50 px-3 py-2 text-lime-950 shadow-sm dark:border-lime-800 dark:bg-lime-950/30 dark:text-lime-100">
+            <Handle
+                id="source"
+                type="source"
+                position={Position.Right}
+                className="!h-3 !w-3 !border-2 !border-background !bg-lime-500"
+            />
+            <div className="text-[10px] uppercase tracking-wider text-lime-700 dark:text-lime-300">
+                Parts Source
+            </div>
+            <div className="text-sm font-semibold">{data.label}</div>
+            {data.subtitle && (
+                <div className="mt-1 truncate text-[11px] text-lime-700 dark:text-lime-300" title={data.subtitle}>
+                    {data.subtitle}
+                </div>
+            )}
+        </div>
+    );
+}
+
+function MachineFlowEdgeComponent({
+    id,
+    sourceX,
+    sourceY,
+    targetX,
+    targetY,
+    sourcePosition,
+    targetPosition,
+    markerEnd,
+    data,
+}: EdgeProps<MachineFlowEdge>) {
+    const [edgePath, labelX, labelY] = getBezierPath({
+        sourceX,
+        sourceY,
+        sourcePosition,
+        targetX,
+        targetY,
+        targetPosition,
+        curvature: data?.kind === 'operator-route' ? 0.34 : 0.2,
+    });
+    const kind = data?.kind || 'completed-parts';
+    const color = data?.color || '#10b981';
+    const isOperatorRoute = kind === 'operator-route';
+    const isInferredContinuation = kind === 'inferred-continuation';
+
+    return (
+        <>
+            <BaseEdge
+                id={id}
+                path={edgePath}
+                markerEnd={markerEnd}
+                style={{
+                    stroke: color,
+                    strokeWidth: isOperatorRoute ? 2.4 : isInferredContinuation ? 2.6 : 3,
+                    strokeDasharray: kind === 'new-parts' ? '10 6' : isOperatorRoute ? '8 7' : isInferredContinuation ? '6 5' : undefined,
+                    opacity: isOperatorRoute ? 0.9 : 0.95,
+                }}
+            />
+            <EdgeLabelRenderer>
+                <div
+                    className={`pointer-events-none absolute rounded-sm border bg-background px-2 py-0.5 text-[10px] font-medium shadow-sm ${
+                        isOperatorRoute
+                            ? 'text-indigo-700 dark:text-indigo-300'
+                            : isInferredContinuation
+                                ? 'text-amber-700 dark:text-amber-300'
+                                : 'text-emerald-700 dark:text-emerald-300'
+                    }`}
+                    style={{
+                        transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)`,
+                    }}
+                >
+                    {data?.label}
+                </div>
+            </EdgeLabelRenderer>
+        </>
+    );
+}
 
 const sortOperationsByDependency = (operations: GarmentStyle['operations']) => {
     const operationById = new Map(operations.map(operation => [operation.id, operation]));
@@ -579,6 +825,54 @@ const sortOperationsByDependency = (operations: GarmentStyle['operations']) => {
     return ordered;
 };
 
+const terminalContinuationBlockPattern = /\b(?:hem|button|buttonhole|pack|packing|finish|finishing|inspect|inspection|press|ironing|label|tag)\b/i;
+const terminalContinuationHintPattern = /\b(?:attach|join|seam|collar|placket|neck|sleeve|waistband|binding|tape|topstitch|pocket|zipper|fly|inseam|outseam)\b/i;
+
+const shouldInferAssemblyContinuation = (operation: GarmentStyle['operations'][number]) => {
+    const name = operation.name || '';
+    if (terminalContinuationBlockPattern.test(name)) return false;
+    return terminalContinuationHintPattern.test(name);
+};
+
+function buildDisplayDependencyGraph(orderedOperations: GarmentStyle['operations']) {
+    const dependenciesByOperation = new Map<string, string[]>();
+    const successorsByOperation = new Map<string, string[]>();
+    const inferredContinuations = new Set<string>();
+    const operationIds = new Set(orderedOperations.map(operation => operation.id));
+
+    orderedOperations.forEach(operation => {
+        const dependencies = unique((operation.dependencies || []).filter(dependencyId => operationIds.has(dependencyId)));
+        dependenciesByOperation.set(operation.id, dependencies);
+        dependencies.forEach(dependencyId => {
+            successorsByOperation.set(
+                dependencyId,
+                unique([...(successorsByOperation.get(dependencyId) || []), operation.id])
+            );
+        });
+    });
+
+    orderedOperations.forEach((operation, index) => {
+        if ((successorsByOperation.get(operation.id)?.length || 0) > 0) return;
+        if (index >= orderedOperations.length - 1) return;
+        if (!shouldInferAssemblyContinuation(operation)) return;
+
+        const target = orderedOperations.slice(index + 1).find(candidate => candidate.id !== operation.id);
+        if (!target) return;
+
+        dependenciesByOperation.set(
+            target.id,
+            unique([...(dependenciesByOperation.get(target.id) || []), operation.id])
+        );
+        successorsByOperation.set(
+            operation.id,
+            unique([...(successorsByOperation.get(operation.id) || []), target.id])
+        );
+        inferredContinuations.add(`${operation.id}->${target.id}`);
+    });
+
+    return { dependenciesByOperation, successorsByOperation, inferredContinuations };
+}
+
 export function buildMachineLayoutGraph(
     plans: MachineLayoutPlan[],
     operators: Operator[],
@@ -592,6 +886,11 @@ export function buildMachineLayoutGraph(
     plans.forEach(plan => {
         const orderedOperations = sortOperationsByDependency(plan.style.operations);
         const operationNameById = new Map(plan.style.operations.map(operation => [operation.id, operation.name]));
+        const {
+            dependenciesByOperation,
+            successorsByOperation,
+            inferredContinuations,
+        } = buildDisplayDependencyGraph(orderedOperations);
         const stationIdByOperation = new Map(
             plan.style.operations.map(operation => [
                 operation.id,
@@ -609,10 +908,8 @@ export function buildMachineLayoutGraph(
 
         orderedOperations.forEach(operation => {
             const operatorIds = assignmentByOperation.get(operation.id) || [];
-            const successors = plan.style.operations.filter(nextOperation =>
-                (nextOperation.dependencies || []).includes(operation.id)
-            );
-            const dependencies = operation.dependencies || [];
+            const successorIds = successorsByOperation.get(operation.id) || [];
+            const dependencies = dependenciesByOperation.get(operation.id) || [];
             const station: MachineLayoutStation = {
                 id: stationIdByOperation.get(operation.id)!,
                 sequence: stations.length,
@@ -627,13 +924,13 @@ export function buildMachineLayoutGraph(
                 inputLabels: dependencies.length > 0
                     ? dependencies.map(dependencyId => operationNameById.get(dependencyId) || dependencyId)
                     : ['New parts'],
-                outputLabels: successors.length > 0
-                    ? successors.map(successor => successor.name)
+                outputLabels: successorIds.length > 0
+                    ? successorIds.map(successorId => operationNameById.get(successorId) || successorId)
                     : ['Finished pieces'],
                 scheduledCount: Math.floor(scheduledCountsByStyleOp[buildRootStyleOpKey(plan.style.id, operation.id)] || 0),
                 completedCount: Math.floor(operation.completedQuantity || 0),
                 isStart: dependencies.length === 0,
-                isFinal: successors.length === 0,
+                isFinal: successorIds.length === 0,
             };
 
             stations.push(station);
@@ -649,18 +946,21 @@ export function buildMachineLayoutGraph(
                     styleScope: plan.styleScope,
                     toStationId: station.id,
                     label: 'New parts',
+                    kind: 'new-parts',
                 });
             }
 
             dependencies.forEach(dependencyId => {
                 const fromStationId = stationIdByOperation.get(dependencyId);
                 if (!fromStationId) return;
+                const isInferred = inferredContinuations.has(`${dependencyId}->${operation.id}`);
                 partLinks.push({
                     id: `${fromStationId}-${station.id}`,
                     styleScope: plan.styleScope,
                     fromStationId,
                     toStationId: station.id,
-                    label: 'Completed parts',
+                    label: isInferred ? 'Inferred continuation' : 'Completed parts',
+                    kind: isInferred ? 'inferred-continuation' : 'completed-parts',
                 });
             });
         });
@@ -687,6 +987,278 @@ export function buildMachineLayoutGraph(
         });
 
     return { stations, partLinks, operatorMovements };
+}
+
+export function buildMachineRelationalLayout(graph: MachineLayoutGraph): MachineLayoutVisual {
+    const nodeWidth = 260;
+    const nodeHeight = 148;
+    const columnGap = 140;
+    const rowGap = 56;
+    const styleGap = 96;
+    const paddingX = 240;
+    const paddingY = 72;
+    const stationById = new Map(graph.stations.map(station => [station.id, station]));
+    const dependenciesByStation = new Map<string, string[]>();
+
+    graph.stations.forEach(station => dependenciesByStation.set(station.id, []));
+    graph.partLinks.forEach(link => {
+        if (!link.fromStationId) return;
+        const list = dependenciesByStation.get(link.toStationId) || [];
+        list.push(link.fromStationId);
+        dependenciesByStation.set(link.toStationId, list);
+    });
+
+    const depthCache = new Map<string, number>();
+    const visiting = new Set<string>();
+    const getDepth = (stationId: string): number => {
+        if (depthCache.has(stationId)) return depthCache.get(stationId)!;
+        if (visiting.has(stationId)) return 0;
+
+        visiting.add(stationId);
+        const dependencies = (dependenciesByStation.get(stationId) || [])
+            .filter(dependencyId => stationById.has(dependencyId));
+        const depth = dependencies.length === 0
+            ? 0
+            : Math.max(...dependencies.map(dependencyId => getDepth(dependencyId) + 1));
+        visiting.delete(stationId);
+        depthCache.set(stationId, depth);
+        return depth;
+    };
+
+    const orderedScopes: PlannerScope[] = ['primary', 'next'];
+    const fallbackScopes = unique(graph.stations.map(station => station.styleScope));
+    const scopes = unique([...orderedScopes, ...fallbackScopes])
+        .filter(scope => graph.stations.some(station => station.styleScope === scope));
+    const visualNodes: MachineLayoutVisualNode[] = [];
+    let currentY = paddingY;
+    let maxDepth = 0;
+
+    scopes.forEach(scope => {
+        const stationsForScope = graph.stations
+            .filter(station => station.styleScope === scope)
+            .sort((a, b) => {
+                const depthDelta = getDepth(a.id) - getDepth(b.id);
+                if (depthDelta !== 0) return depthDelta;
+                return a.sequence - b.sequence;
+            });
+        const buckets = new Map<number, MachineLayoutStation[]>();
+        stationsForScope.forEach(station => {
+            const depth = getDepth(station.id);
+            const list = buckets.get(depth) || [];
+            list.push(station);
+            buckets.set(depth, list);
+            maxDepth = Math.max(maxDepth, depth);
+        });
+
+        const maxRowsInScope = Math.max(1, ...Array.from(buckets.values()).map(items => items.length));
+        Array.from(buckets.entries()).forEach(([depth, bucketStations]) => {
+            bucketStations.forEach((station, rowIndex) => {
+                visualNodes.push({
+                    ...station,
+                    depth,
+                    width: nodeWidth,
+                    height: nodeHeight,
+                    x: paddingX + (depth * (nodeWidth + columnGap)),
+                    y: currentY + (rowIndex * (nodeHeight + rowGap)),
+                });
+            });
+        });
+
+        currentY += (maxRowsInScope * nodeHeight) + ((maxRowsInScope - 1) * rowGap) + styleGap;
+    });
+
+    const visualById = new Map(visualNodes.map(node => [node.id, node]));
+    const buildHorizontalPath = (
+        start: { x: number; y: number },
+        end: { x: number; y: number },
+        curve = 42
+    ) => {
+        const controlOffset = Math.max(curve, Math.abs(end.x - start.x) / 2);
+        return `M ${start.x} ${start.y} C ${start.x + controlOffset} ${start.y}, ${end.x - controlOffset} ${end.y}, ${end.x} ${end.y}`;
+    };
+
+    const partLinks: MachineLayoutVisualLink[] = graph.partLinks
+        .flatMap(link => {
+            const toNode = visualById.get(link.toStationId);
+            if (!toNode) return [];
+            const fromNode = link.fromStationId ? visualById.get(link.fromStationId) : undefined;
+            const start = fromNode
+                ? {
+                    x: fromNode.x + fromNode.width,
+                    y: fromNode.y + (fromNode.height / 2),
+                }
+                : {
+                    x: Math.max(16, toNode.x - 44),
+                    y: toNode.y + (toNode.height / 2),
+                };
+            const end = {
+                x: toNode.x,
+                y: toNode.y + (toNode.height / 2),
+            };
+
+            return [{
+                id: link.id,
+                label: link.label,
+                toStationId: link.toStationId,
+                kind: link.kind,
+                path: buildHorizontalPath(start, end, link.fromStationId ? 42 : 20),
+                ...(link.fromStationId ? { fromStationId: link.fromStationId } : {}),
+            }];
+        });
+
+    const operatorColors = ['#6366f1', '#0891b2', '#d97706', '#9333ea', '#16a34a', '#dc2626'];
+    const operatorLinks = graph.operatorMovements.flatMap((movement, movementIndex) => {
+        if (movement.stationIds.length < 2) return [];
+        const color = operatorColors[movementIndex % operatorColors.length];
+        return movement.stationIds.slice(1).map((stationId, index) => {
+            const fromNode = visualById.get(movement.stationIds[index]);
+            const toNode = visualById.get(stationId);
+            if (!fromNode || !toNode) return null;
+
+            const laneOffset = 14 + ((movementIndex % 4) * 8);
+            const start = {
+                x: fromNode.x + (fromNode.width / 2),
+                y: fromNode.y + fromNode.height + laneOffset,
+            };
+            const end = {
+                x: toNode.x + (toNode.width / 2),
+                y: toNode.y - laneOffset,
+            };
+            const midY = Math.max(start.y, end.y) + 24 + laneOffset;
+            const path = `M ${start.x} ${start.y} C ${start.x} ${midY}, ${end.x} ${midY}, ${end.x} ${end.y}`;
+
+            return {
+                id: `${movement.operatorId}-${movement.stationIds[index]}-${stationId}`,
+                operatorId: movement.operatorId,
+                operatorName: movement.operatorName,
+                fromStationId: movement.stationIds[index],
+                toStationId: stationId,
+                path,
+                color,
+            };
+        }).filter((link): link is MachineLayoutVisualOperatorLink => !!link);
+    });
+
+    const width = Math.max(
+        420,
+        paddingX + ((maxDepth + 1) * nodeWidth) + (maxDepth * columnGap) + paddingX
+    );
+    const bottom = visualNodes.length > 0
+        ? Math.max(...visualNodes.map(node => node.y + node.height)) + paddingY
+        : 220;
+    const height = Math.max(260, bottom + (operatorLinks.length > 0 ? 28 : 0));
+
+    return {
+        width,
+        height,
+        nodes: visualNodes,
+        partLinks,
+        operatorLinks,
+    };
+}
+
+export function buildMachineFlowElements(graph: MachineLayoutGraph): MachineFlowElements {
+    const layout = buildMachineRelationalLayout(graph);
+    const stationNodes: MachineFlowNode[] = layout.nodes.map(node => ({
+        id: node.id,
+        type: 'machineStation',
+        position: { x: node.x, y: node.y },
+        data: {
+            kind: 'station',
+            station: node,
+            label: node.operationName,
+            subtitle: node.machineType,
+            countLabel: `${node.scheduledCount} pcs`,
+            styleScope: node.styleScope,
+        },
+        sourcePosition: Position.Right,
+        targetPosition: Position.Left,
+        draggable: false,
+    }));
+
+    const stationById = new Map(layout.nodes.map(node => [node.id, node]));
+    const sourceNodes: MachineFlowNode[] = layout.partLinks
+        .filter(link => link.kind === 'new-parts')
+        .flatMap(link => {
+            const target = stationById.get(link.toStationId);
+            if (!target) return [];
+            return [{
+                id: `${link.id}-source`,
+                type: 'partSource' as const,
+                position: {
+                    x: Math.max(28, target.x - 190),
+                    y: target.y + 28,
+                },
+                data: {
+                    kind: 'source' as const,
+                    label: 'New parts',
+                    subtitle: target.styleLabel,
+                    styleScope: target.styleScope,
+                },
+                sourcePosition: Position.Right,
+                draggable: false,
+            }];
+        });
+
+    const partEdges: MachineFlowEdge[] = layout.partLinks.map(link => {
+        const isNewParts = link.kind === 'new-parts';
+        const isInferredContinuation = link.kind === 'inferred-continuation';
+        const color = isNewParts ? '#84cc16' : isInferredContinuation ? '#f59e0b' : '#10b981';
+        return {
+            id: link.id,
+            type: 'machineFlow',
+            source: isNewParts ? `${link.id}-source` : link.fromStationId!,
+            sourceHandle: isNewParts ? 'source' : 'parts-out',
+            target: link.toStationId,
+            targetHandle: 'parts-in',
+            data: {
+                kind: link.kind,
+                label: link.label,
+                color,
+            },
+            markerEnd: {
+                type: MarkerType.ArrowClosed,
+                color,
+                width: 18,
+                height: 18,
+            },
+            focusable: false,
+            selectable: false,
+            animated: isNewParts || isInferredContinuation,
+            zIndex: isNewParts ? 2 : isInferredContinuation ? 4 : 3,
+        };
+    });
+
+    const operatorEdges: MachineFlowEdge[] = layout.operatorLinks.map(link => ({
+        id: link.id,
+        type: 'machineFlow',
+        source: link.fromStationId,
+        sourceHandle: 'operator-out',
+        target: link.toStationId,
+        targetHandle: 'operator-in',
+        data: {
+            kind: 'operator-route',
+            label: link.operatorName,
+            color: link.color,
+        },
+        markerEnd: {
+            type: MarkerType.ArrowClosed,
+            color: link.color,
+            width: 16,
+            height: 16,
+        },
+        focusable: false,
+        selectable: false,
+        animated: true,
+        zIndex: 5,
+    }));
+
+    return {
+        width: Math.max(layout.width, 720),
+        height: Math.max(layout.height, 420),
+        nodes: [...sourceNodes, ...stationNodes],
+        edges: [...partEdges, ...operatorEdges],
+    };
 }
 
 const getAssignmentUnitKey = (unit: AssignmentUnit) =>
@@ -2378,6 +2950,11 @@ export function AIProductionPlanner(): React.ReactNode {
             .filter(group => group.style && group.stations.length > 0);
     }, [machineLayoutGraph.stations, selectedStyle, selectedNextStyle]);
 
+    const machineFlowElements = useMemo(
+        () => buildMachineFlowElements(machineLayoutGraph),
+        [machineLayoutGraph]
+    );
+
     const nextStyleFlowStatus = useMemo(() => {
         if (!selectedNextStyle) return null;
         if (!hasActiveNextAssignments) {
@@ -3211,24 +3788,89 @@ export function AIProductionPlanner(): React.ReactNode {
 
                     {machineLayoutStyleGroups.length > 0 && (
                         <div className="rounded-md border bg-background p-4 space-y-5">
-                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
-                                <div>
-                                    <h4 className="text-sm font-semibold flex items-center gap-2">
-                                        <Factory className="h-4 w-4 text-indigo-500" />
-                                        Machine Layout Graph
+                                <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                                    <div>
+                                        <h4 className="text-sm font-semibold flex items-center gap-2">
+                                            <Factory className="h-4 w-4 text-indigo-500" />
+                                            Machine Layout Graph
                                     </h4>
                                     <p className="text-xs text-muted-foreground">
                                         Accepted balance with part movement and operator station movement.
                                     </p>
                                 </div>
                                 <Badge variant="outline" className="w-fit">
-                                    {machineLayoutGraph.stations.length} machines
-                                </Badge>
-                            </div>
+                                        {machineLayoutGraph.stations.length} machines
+                                    </Badge>
+                                </div>
 
-                            <div className="space-y-5">
-                                {machineLayoutStyleGroups.map(group => (
-                                    <div key={group.scope} className="space-y-3">
+                                {machineFlowElements.nodes.length > 0 && (
+                                    <div className="rounded-md border bg-muted/20 p-3 space-y-3">
+                                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+                                            <div className="flex items-center gap-2 text-sm font-semibold">
+                                                <Route className="h-4 w-4 text-indigo-500" />
+                                                Relational Flow Map
+                                            </div>
+                                            <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground">
+                                                <span className="inline-flex items-center gap-1.5">
+                                                    <span className="h-1 w-9 rounded-full bg-emerald-500" />
+                                                    Completed parts
+                                                </span>
+                                                <span className="inline-flex items-center gap-1.5">
+                                                    <span className="h-1 w-9 rounded-full border-t-2 border-dashed border-lime-500" />
+                                                    New parts
+                                                </span>
+                                                <span className="inline-flex items-center gap-1.5">
+                                                    <span className="h-1 w-9 rounded-full border-t-2 border-dashed border-amber-500" />
+                                                    Inferred continuation
+                                                </span>
+                                                <span className="inline-flex items-center gap-1.5">
+                                                    <span className="h-1 w-9 rounded-full border-t-2 border-dashed border-indigo-500" />
+                                                    Operator route
+                                                </span>
+                                            </div>
+                                        </div>
+
+                                        <div className="rounded-md border bg-background" data-testid="machine-relational-graph">
+                                            <div
+                                                className="machine-flow-map"
+                                                style={{
+                                                    height: Math.min(720, Math.max(460, machineFlowElements.height + 48)),
+                                                }}
+                                            >
+                                                <ReactFlow
+                                                    nodes={machineFlowElements.nodes}
+                                                    edges={machineFlowElements.edges}
+                                                    nodeTypes={machineFlowNodeTypes}
+                                                    edgeTypes={machineFlowEdgeTypes}
+                                                    nodesDraggable={false}
+                                                    nodesConnectable={false}
+                                                    elementsSelectable={false}
+                                                    fitView
+                                                    fitViewOptions={{ padding: 0.18 }}
+                                                    minZoom={0.35}
+                                                    maxZoom={1.35}
+                                                    panOnScroll
+                                                    zoomOnScroll
+                                                    proOptions={{ hideAttribution: true }}
+                                                    aria-label="Machine layout relational flow"
+                                                >
+                                                    <Background gap={24} size={1.3} color="#dbe5f0" />
+                                                    <Controls showInteractive={false} />
+                                                    <MiniMap
+                                                        pannable
+                                                        zoomable
+                                                        nodeColor={node => node.type === 'partSource' ? '#84cc16' : '#60a5fa'}
+                                                        maskColor="rgba(15, 23, 42, 0.08)"
+                                                    />
+                                                </ReactFlow>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="space-y-5">
+                                    {machineLayoutStyleGroups.map(group => (
+                                        <div key={group.scope} className="space-y-3">
                                         <div className="flex flex-wrap items-center gap-2">
                                             <Badge variant={group.scope === 'primary' ? 'default' : 'secondary'}>
                                                 {group.scope === 'primary' ? 'Current Style' : 'Next Style'}

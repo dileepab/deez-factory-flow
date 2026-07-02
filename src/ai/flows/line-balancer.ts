@@ -7,7 +7,9 @@ import {
   type LineBalancerInput,
   type LineBalancerOutput,
 } from './line-balancer-schemas';
-import { getAiErrorText, runWithGeminiRetry } from './gemini-retry';
+import { getAiErrorText, isGeminiQuotaExceededError, isRetryableGeminiError, runWithGeminiRetry } from './gemini-retry';
+import { buildFallbackLineBalance } from './line-balancer-fallback';
+import { getLineBalancerModelChain } from './line-balancer-models';
 
 export async function getLineBalancerSuggestions(
   input: LineBalancerInput
@@ -78,16 +80,38 @@ const lineBalancerFlow = ai.defineFlow(
     outputSchema: LineBalancerOutputSchema,
   },
   async input => {
-    const { output } = await runWithGeminiRetry(
-      () => prompt(input),
-      {
-        onRetry: ({ nextAttempt, maxAttempts, delayMs, error }) => {
-          console.warn(
-            `AI line balancer retry ${nextAttempt}/${maxAttempts} in ${delayMs}ms: ${getAiErrorText(error)}`
-          );
-        },
+    let lastModelError: unknown;
+
+    for (const model of getLineBalancerModelChain()) {
+      try {
+        const { output } = await runWithGeminiRetry(
+          () => prompt(input, { model }),
+          {
+            shouldRetry: error => isGeminiQuotaExceededError(error) ? false : isRetryableGeminiError(error),
+            onRetry: ({ nextAttempt, maxAttempts, delayMs, error }) => {
+              console.warn(
+                `AI line balancer retry ${nextAttempt}/${maxAttempts} on ${model} in ${delayMs}ms: ${getAiErrorText(error)}`
+              );
+            },
+          }
+        );
+        return output!;
+      } catch (error) {
+        if (!isRetryableGeminiError(error) && !isGeminiQuotaExceededError(error)) {
+          throw error;
+        }
+
+        lastModelError = error;
+        console.warn(`AI line balancer model ${model} failed; trying fallback if available:`, getAiErrorText(error));
       }
-    );
-    return output!;
+    }
+
+    try {
+      console.warn('AI line balancer using local fallback after Gemini model chain failed:', getAiErrorText(lastModelError));
+      return buildFallbackLineBalance(input, getAiErrorText(lastModelError));
+    } catch (fallbackError) {
+      console.warn('AI line balancer local fallback failed:', fallbackError);
+      throw lastModelError;
+    }
   }
 );

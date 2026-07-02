@@ -14,6 +14,11 @@ const RETRYABLE_MESSAGE_PATTERNS = [
   /\betimedout\b/i,
   /\beconnreset\b/i,
 ] as const;
+const QUOTA_EXHAUSTED_MESSAGE_PATTERNS = [
+  /\bquota exceeded\b/i,
+  /\bexceeded your current quota\b/i,
+  /\bfree_tier_requests\b/i,
+] as const;
 
 export const AI_RETRY_EXHAUSTED_MESSAGE =
   'AI planning is temporarily busy after several retries. Please try AI Balance Line again in a few minutes.';
@@ -89,6 +94,11 @@ export const isRetryableGeminiError = (error: unknown): boolean => {
 
   const text = getAiErrorText(error);
   return RETRYABLE_MESSAGE_PATTERNS.some(pattern => pattern.test(text));
+};
+
+export const isGeminiQuotaExceededError = (error: unknown): boolean => {
+  const text = getAiErrorText(error);
+  return QUOTA_EXHAUSTED_MESSAGE_PATTERNS.some(pattern => pattern.test(text));
 };
 
 export const getRetryableAiErrorMessage = (error: unknown): string | null =>
