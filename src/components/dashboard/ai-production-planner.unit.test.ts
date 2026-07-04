@@ -16,6 +16,7 @@ import {
     buildMachineFlowElements,
     buildMachineLayoutGraph,
     buildMachineRelationalLayout,
+    comparePlanQualityForAutoOptimize,
     findSafeNextStylePlan,
     flattenAssignmentUnits,
     getNextStylePrimaryDropLimit,
@@ -202,6 +203,18 @@ describe('ai-production-planner next-style flow guard', () => {
 
         expect(decision.action).toBe('accept');
         expect(decision.wipDelta).toBe(-8);
+    });
+
+    it('ranks auto-optimize candidates by current output before WIP', () => {
+        expect(comparePlanQualityForAutoOptimize(
+            quality({ actualOutput: 201, primaryOutput: 201, estimatedWip: 95 }),
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 40 })
+        )).toBeGreaterThan(0);
+
+        expect(comparePlanQualityForAutoOptimize(
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 65 }),
+            quality({ actualOutput: 200, primaryOutput: 200, estimatedWip: 82 })
+        )).toBeGreaterThan(0);
     });
 
     it('builds machine layout stations, part flow, and operator movement routes', () => {

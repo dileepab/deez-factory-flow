@@ -200,11 +200,23 @@ type PlannerAssignmentScope = {
     variantId?: string;
 };
 type AutoAssignMode = 'balanced' | 'conservative';
+type BalanceRunMode = 'fresh' | 'improve' | 'auto';
 type SimulationStyleSlot = {
     source: PlannerScope;
     rootStyleId: string;
     variantId?: string;
     variantColor?: string;
+};
+type SavedBestBalance = {
+    assignments: Assignment[];
+    variantAssignments: Record<string, Assignment[]>;
+    nextAssignments: Assignment[];
+    nextVariantAssignments: Record<string, Assignment[]>;
+    nextStyleDecision: NextStyleFlowDecision | null;
+    quality: PlanQuality;
+    reasoning: string;
+    sourceLabel: string;
+    savedAt: number;
 };
 export type PlanQuality = {
     actualOutput: number;
@@ -239,6 +251,42 @@ export type RebalanceGuardDecision = {
     actualOutputDelta: number;
     wipDelta: number;
 };
+
+const AI_AUTO_OPTIMIZE_STRATEGIES = [
+    {
+        id: 'finished-output',
+        label: 'Max finished output',
+        goal: 'Generate a candidate that maximizes same-day finished current-style output. Use shared relief only when it improves finished output after simulation. Avoid stealing time from the terminal bottleneck.',
+    },
+    {
+        id: 'idle-changeover',
+        label: 'Reduce idle and changeover',
+        goal: 'Generate a candidate that reduces operator idle time and machine/operator changeover waste while keeping current-style finished output at least as high as the baseline.',
+    },
+    {
+        id: 'wip-control',
+        label: 'Control WIP',
+        goal: 'Generate a candidate that keeps finished output high but reduces excess WIP, especially upstream overproduction that cannot reach finished goods today.',
+    },
+    {
+        id: 'warmup-relief',
+        label: 'Warm-up shared relief',
+        goal: 'Generate a candidate that uses genuinely spare downstream operators as early warm-up support on upstream feeder or bottleneck operations, then preserves their downstream role. Keep original owners on those operations and avoid serializing the line.',
+    },
+] as const;
+
+export function comparePlanQualityForAutoOptimize(left: PlanQuality, right: PlanQuality): number {
+    const comparisons = [
+        left.primaryOutput - right.primaryOutput,
+        left.actualOutput - right.actualOutput,
+        left.nextOutput - right.nextOutput,
+        right.estimatedWip - left.estimatedWip,
+        right.primaryWip - left.primaryWip,
+        right.nextWip - left.nextWip,
+    ];
+
+    return comparisons.find(delta => delta !== 0) || 0;
+}
 
 export const getNextStylePrepWipLimit = (primaryOutput: number): number => {
     const scaledLimit = Math.round(Math.max(0, primaryOutput) * NEXT_STYLE_PREP_WIP_OUTPUT_RATIO);
@@ -392,6 +440,11 @@ const cloneAssignments = (items: Assignment[]): Assignment[] =>
         ...(item.variantId ? { variantId: item.variantId } : {}),
         ...(item.variantColor ? { variantColor: item.variantColor } : {}),
     }));
+
+const cloneAssignmentMap = (items: Record<string, Assignment[]>): Record<string, Assignment[]> =>
+    Object.fromEntries(
+        Object.entries(items).map(([key, value]) => [key, cloneAssignments(value)])
+    );
 
 const distributeOperatorsAcrossVariants = (
     variants: { id: string; quantity: number }[],
@@ -1348,7 +1401,7 @@ export function AIProductionPlanner(): React.ReactNode {
     } = useMachineTypes();
     const [selectedStyleId, setSelectedStyleId] = useState<string>("");
     const [selectedNextStyleId, setSelectedNextStyleId] = useState<string>(""); // NEW: Next Style
-    const [dailyTarget, setDailyTarget] = useState<number>(500);
+    const [dailyTarget, setDailyTarget] = useState<number>(0);
     const [switchDelay, setSwitchDelay] = useState<number>(2); // Configurable Switch Delay (mins)
 
     // Initialize Switch Delay from Config
@@ -1360,13 +1413,14 @@ export function AIProductionPlanner(): React.ReactNode {
 
     const [isPublishing, setIsPublishing] = useState(false);
     const [isBalancing, setIsBalancing] = useState(false);
+    const [balanceRunMode, setBalanceRunMode] = useState<BalanceRunMode | null>(null);
     const [aiReasoning, setAiReasoning] = useState<string | null>(null);
     const [assignments, setAssignments] = useState<Assignment[]>([]);
     const [nextAssignments, setNextAssignments] = useState<Assignment[]>([]); // NEW: Assignments for Next Style
     const [lastNextStyleDecision, setLastNextStyleDecision] = useState<NextStyleFlowDecision | null>(null);
+    const [savedBestBalance, setSavedBestBalance] = useState<SavedBestBalance | null>(null);
     const [variantAssignments, setVariantAssignments] = useState<Record<string, Assignment[]>>({});
     const [nextVariantAssignments, setNextVariantAssignments] = useState<Record<string, Assignment[]>>({});
-    const [planningMode, setPlanningMode] = useState<'target' | 'capacity'>('capacity');
     const [availableOperatorIds, setAvailableOperatorIds] = useState<string[]>([]);
     const [machineCounts, setMachineCounts] = useState<Record<string, number>>({});
     const [enableThreadConstraints, setEnableThreadConstraints] = useState<boolean>(true);
@@ -1650,32 +1704,6 @@ export function AIProductionPlanner(): React.ReactNode {
         }
     }, [operators, availableOperatorIds]);
 
-    // Recalculate target based on capacity
-    useEffect(() => {
-        if (planningMode === 'capacity' && selectedStyle && selectedStyle.totalSmv > 0) {
-            // Target = (Operators * Mins) / TotalSMV
-            const count = availableOperatorIds.length;
-            const calculatedTarget = (count * availableMinutes) / selectedStyle.totalSmv;
-            const remainingOrders = selectedNextStyle
-                ? remainingPrimaryQty + remainingNextQty
-                : remainingPrimaryQty;
-            const hasOrderBound = (selectedStyle.quantity || 0) > 0 || (selectedNextStyle?.quantity || 0) > 0;
-            const boundedTarget = hasOrderBound
-                ? Math.min(calculatedTarget, Math.max(0, remainingOrders))
-                : calculatedTarget;
-
-            setDailyTarget(Math.max(0, Math.floor(boundedTarget)));
-        }
-    }, [
-        planningMode,
-        availableOperatorIds,
-        selectedStyle,
-        selectedNextStyle,
-        availableMinutes,
-        remainingPrimaryQty,
-        remainingNextQty
-    ]);
-
     // Clear assignments when style changes
     useEffect(() => {
         setAssignments([]);
@@ -1928,8 +1956,8 @@ export function AIProductionPlanner(): React.ReactNode {
         style.operations.forEach(op => {
             const res = solved.get(op.id);
             const localOutput = res?.localOutput || 0;
-            const reqOps = (dailyTarget * (op.smv / 60)) / availableMinutes;
-            const pct = (localOutput / dailyTarget) * 100;
+            const reqOps = dailyTarget > 0 ? (dailyTarget * (op.smv / 60)) / availableMinutes : 0;
+            const pct = dailyTarget > 0 ? (localOutput / dailyTarget) * 100 : 0;
 
             metrics[op.id] = {
                 localCapacity: localOutput,
@@ -2135,7 +2163,6 @@ export function AIProductionPlanner(): React.ReactNode {
         operatorAttendance,
         learnedPerformance,
         threadConstraintConfig,
-        planningMode,
     ]);
 
     // Global bottleneck: "Actual Output" derived from Simulation (Final Good Count)
@@ -2227,6 +2254,10 @@ export function AIProductionPlanner(): React.ReactNode {
         bottleneckOutput.next,
         salarySettings,
     ]);
+    const hasCurrentPrimaryPlan = useMemo(
+        () => hasAnyScopedAssignments(assignments, variantAssignments),
+        [assignments, variantAssignments, hasAnyScopedAssignments]
+    );
     const salaryTargetBadge = useMemo(() => {
         if (salaryProjection.targetStatus === 'healthy-margin') {
             return { label: 'Healthy margin', variant: 'default' as const, className: 'bg-emerald-600 hover:bg-emerald-600' };
@@ -2492,6 +2523,94 @@ export function AIProductionPlanner(): React.ReactNode {
         return isOutputRegression && isWipRegression;
     }, []);
 
+    const currentPlanQuality = useMemo(() => {
+        if (!hasCurrentPrimaryPlan) return null;
+        return evaluatePlanQuality(
+            assignments,
+            variantAssignments,
+            nextAssignments,
+            nextVariantAssignments
+        );
+    }, [
+        hasCurrentPrimaryPlan,
+        assignments,
+        variantAssignments,
+        nextAssignments,
+        nextVariantAssignments,
+        evaluatePlanQuality,
+    ]);
+
+    const saveBestBalanceSnapshot = useCallback((
+        sourceLabel: string,
+        quality: PlanQuality,
+        reasoning: string,
+        snapshot?: {
+            assignments: Assignment[];
+            variantAssignments: Record<string, Assignment[]>;
+            nextAssignments: Assignment[];
+            nextVariantAssignments: Record<string, Assignment[]>;
+            nextStyleDecision: NextStyleFlowDecision | null;
+        }
+    ) => {
+        if (quality.actualOutput <= 0 && quality.estimatedWip <= 0) return;
+
+        const plan = snapshot || {
+            assignments,
+            variantAssignments,
+            nextAssignments,
+            nextVariantAssignments,
+            nextStyleDecision: lastNextStyleDecision,
+        };
+
+        setSavedBestBalance(previous => {
+            if (previous && comparePlanQualityForAutoOptimize(previous.quality, quality) >= 0) {
+                return previous;
+            }
+
+            return {
+                assignments: cloneAssignments(plan.assignments),
+                variantAssignments: cloneAssignmentMap(plan.variantAssignments),
+                nextAssignments: cloneAssignments(plan.nextAssignments),
+                nextVariantAssignments: cloneAssignmentMap(plan.nextVariantAssignments),
+                nextStyleDecision: plan.nextStyleDecision,
+                quality,
+                reasoning,
+                sourceLabel,
+                savedAt: Date.now(),
+            };
+        });
+    }, [
+        assignments,
+        variantAssignments,
+        nextAssignments,
+        nextVariantAssignments,
+        lastNextStyleDecision,
+    ]);
+
+    useEffect(() => {
+        if (!currentPlanQuality) return;
+        saveBestBalanceSnapshot(
+            'Current visible plan',
+            currentPlanQuality,
+            'Automatically saved because this visible plan is the best simulated result so far.'
+        );
+    }, [currentPlanQuality, saveBestBalanceSnapshot]);
+
+    const handleRestoreBestBalance = useCallback(() => {
+        if (!savedBestBalance) return;
+
+        setAssignments(cloneAssignments(savedBestBalance.assignments));
+        setVariantAssignments(cloneAssignmentMap(savedBestBalance.variantAssignments));
+        setNextAssignments(cloneAssignments(savedBestBalance.nextAssignments));
+        setNextVariantAssignments(cloneAssignmentMap(savedBestBalance.nextVariantAssignments));
+        setLastNextStyleDecision(savedBestBalance.nextStyleDecision);
+        setAiReasoning(`${savedBestBalance.reasoning}\n\nRestored saved best plan from ${savedBestBalance.sourceLabel}: ${savedBestBalance.quality.primaryOutput} current pcs, ${savedBestBalance.quality.actualOutput} total pcs, ${savedBestBalance.quality.estimatedWip} WIP.`);
+        toast({
+            title: 'Best Plan Restored',
+            description: `${savedBestBalance.sourceLabel}: ${savedBestBalance.quality.primaryOutput} current pcs, ${savedBestBalance.quality.estimatedWip} WIP.`,
+        });
+    }, [savedBestBalance, toast]);
+
     const handleThreadInventoryChange = useCallback((color: string, rawValue: string) => {
         const value = Math.max(0, parseInt(rawValue) || 0);
         const nextInventory = {
@@ -2550,23 +2669,72 @@ export function AIProductionPlanner(): React.ReactNode {
     ]);
 
     // AI Line Balancer Handler
-    const handleAILineBalance = useCallback(async () => {
+    const handleAILineBalance = useCallback(async (mode: BalanceRunMode = 'fresh') => {
         if (!selectedStyle) return;
+
+        const isImprovementRun = mode === 'improve';
+        const isTournamentRun = mode === 'auto';
+        const useCurrentPlanContext = mode !== 'fresh';
+        const hasExistingPlan = hasAnyScopedAssignments(assignments, variantAssignments);
+
+        if (isImprovementRun && !hasExistingPlan) {
+            toast({
+                title: 'No Current Plan Yet',
+                description: 'Run AI Balance Line or add assignments before asking AI to improve the current plan.',
+            });
+            return;
+        }
+
         setIsBalancing(true);
+        setBalanceRunMode(mode);
+
         try {
             const candidatesPool = operators.filter(o => availableOperatorIds.includes(o.id));
             const previousAiReasoning = aiReasoning;
             const previousNextStyleDecision = lastNextStyleDecision;
-            const hasExistingPlan = hasAnyScopedAssignments(assignments, variantAssignments);
-            const existingQuality = hasExistingPlan
-                ? evaluatePlanQuality(
-                    assignments,
-                    variantAssignments,
-                    nextAssignments,
-                    nextVariantAssignments
-                )
-                : null;
-            const buildBalancerInput = (style: GarmentStyle, operatorPool: typeof candidatesPool = candidatesPool) => ({
+            const existingQuality = hasExistingPlan ? currentPlanQuality : null;
+            const currentPlanSummary = useCurrentPlanContext && existingQuality
+                ? {
+                    currentStyleOutput: existingQuality.primaryOutput,
+                    nextStyleOutput: existingQuality.nextOutput,
+                    totalOutput: existingQuality.actualOutput,
+                    estimatedWip: existingQuality.estimatedWip,
+                    primaryWip: existingQuality.primaryWip,
+                    nextWip: existingQuality.nextWip,
+                    capacityTarget: dailyTarget,
+                    salaryTarget: salaryProjection.dailyDressTarget,
+                }
+                : undefined;
+
+            const buildCurrentAssignmentContext = (
+                baseAssigns: Assignment[],
+                byVariantAssigns: Record<string, Assignment[]>
+            ) => [
+                ...baseAssigns,
+                ...Object.values(byVariantAssigns).flatMap(items => items),
+            ]
+                .map(assignment => ({
+                    operationId: assignment.operationId,
+                    operatorIds: unique(assignment.operatorIds.filter(Boolean)),
+                    ...(assignment.variantId ? { variantId: assignment.variantId } : {}),
+                    ...(assignment.variantColor ? { variantColor: assignment.variantColor } : {}),
+                }))
+                .filter(assignment => assignment.operatorIds.length > 0);
+
+            const primaryCurrentAssignments = useCurrentPlanContext
+                ? buildCurrentAssignmentContext(assignments, variantAssignments)
+                : [];
+            const nextCurrentAssignments = useCurrentPlanContext
+                ? buildCurrentAssignmentContext(nextAssignments, nextVariantAssignments)
+                : [];
+
+            const buildBalancerInput = (
+                style: GarmentStyle,
+                operatorPool: typeof candidatesPool = candidatesPool,
+                currentAssignmentsForStyle: typeof primaryCurrentAssignments = [],
+                planSummary = currentPlanSummary,
+                improvementGoal?: string
+            ) => ({
                 style: {
                     id: style.id,
                     name: style.name,
@@ -2587,14 +2755,218 @@ export function AIProductionPlanner(): React.ReactNode {
                     efficiency: o.efficiencyRating || 100,
                     reworkRate: o.rework || 0
                 })),
-                machineCounts: machineCounts
+                machineCounts: machineCounts,
+                ...(currentAssignmentsForStyle.length > 0 ? { currentAssignments: currentAssignmentsForStyle } : {}),
+                ...(planSummary ? { currentPlanSummary: planSummary } : {}),
+                ...(improvementGoal ? { improvementGoal } : {}),
             });
 
-            const result = await runLineBalancer(buildBalancerInput(selectedStyle));
-            if ('error' in result) {
-                const description = hasExistingPlan
-                    ? `${result.error} Current/best balance remains on screen.`
-                    : result.error;
+            type BalanceStrategy = {
+                id: string;
+                label: string;
+                goal: string;
+            };
+            type BalanceCandidate = {
+                strategy: BalanceStrategy;
+                primaryAssignments: Assignment[];
+                primaryVariantAssignments: Record<string, Assignment[]>;
+                nextStyleAssignments: Assignment[];
+                nextStyleVariantAssignments: Record<string, Assignment[]>;
+                quality: PlanQuality;
+                reasoning: string;
+                nextBalanceDecision: NextStyleFlowDecision | null;
+                nextBalanceError: string | null;
+            };
+
+            const runCandidate = async (strategy: BalanceStrategy): Promise<BalanceCandidate | { error: string }> => {
+                const result = await runLineBalancer(
+                    buildBalancerInput(
+                        selectedStyle,
+                        candidatesPool,
+                        primaryCurrentAssignments,
+                        currentPlanSummary,
+                        strategy.goal
+                    )
+                );
+
+                if ('error' in result) return { error: result.error };
+
+                const computedPrimary: Assignment[] = result.assignments.map(a => ({
+                    operationId: a.operationId,
+                    operatorIds: a.operatorIds
+                }));
+                const computedPrimaryVariants = buildVariantAssignmentMap(selectedStyle, computedPrimary);
+                let nextBalanceDecision: NextStyleFlowDecision | null = null;
+                let nextBalanceError: string | null = null;
+                let candidateNextAssignments: Assignment[] = [];
+                let candidateNextVariantAssignments: Record<string, Assignment[]> = {};
+                let combinedReasoning = result.reasoning;
+
+                if (selectedNextStyle) {
+                    try {
+                        let constraintOperatorIds: string[] = [];
+                        try {
+                            const primarySim = simulateProductionSchedule(
+                                [selectedStyle],
+                                [computedPrimary],
+                                candidatesPool,
+                                machineCounts,
+                                availableMinutes,
+                                switchDelay,
+                                operatorAttendance,
+                                learnedPerformance,
+                                undefined,
+                                threadConstraintConfig
+                            );
+                            const counts: Record<string, number> = {};
+                            Object.values(primarySim.schedule).forEach((segs: any[]) =>
+                                segs.forEach(s => { counts[s.opId] = (counts[s.opId] || 0) + s.count; })
+                            );
+                            const feedsSomething = new Set<string>();
+                            selectedStyle.operations.forEach(op => (op.dependencies || []).forEach(d => feedsSomething.add(d)));
+                            const terminals = selectedStyle.operations.filter(op => !feedsSomething.has(op.id));
+                            let bindingOpId: string | null = null;
+                            let minCount = Infinity;
+                            terminals.forEach(op => {
+                                const c = counts[op.id] || 0;
+                                if (c < minCount) { minCount = c; bindingOpId = op.id; }
+                            });
+                            if (bindingOpId) {
+                                constraintOperatorIds = computedPrimary.find(a => a.operationId === bindingOpId)?.operatorIds || [];
+                            }
+                        } catch (simErr) {
+                            console.error("Primary constraint detection failed:", simErr);
+                        }
+
+                        const skillHolderCount: Record<string, number> = {};
+                        candidatesPool.forEach(o => (o.skills || []).forEach(sk => {
+                            skillHolderCount[sk] = (skillHolderCount[sk] || 0) + 1;
+                        }));
+                        const nextOperatorPool = candidatesPool.map(o => {
+                            if (!constraintOperatorIds.includes(o.id)) return o;
+                            const uniqueSkills = (o.skills || []).filter(sk => skillHolderCount[sk] === 1);
+                            return { ...o, skills: uniqueSkills };
+                        });
+
+                        const nextResult = await runLineBalancer(
+                            buildBalancerInput(
+                                selectedNextStyle,
+                                nextOperatorPool,
+                                nextCurrentAssignments,
+                                currentPlanSummary,
+                                `${strategy.goal} For next-style work, only use safe idle capacity that does not reduce current-style finished output.`
+                            )
+                        );
+                        if ('error' in nextResult) {
+                            nextBalanceError = nextResult.error;
+                        } else {
+                            const computedNext: Assignment[] = nextResult.assignments.map(a => ({
+                                operationId: a.operationId,
+                                operatorIds: a.operatorIds
+                            }));
+                            const primaryOnlyQuality = evaluatePlanQuality(
+                                computedPrimary,
+                                computedPrimaryVariants,
+                                [],
+                                {}
+                            );
+                            const safeNextPlan = primaryOnlyQuality
+                                ? findSafeNextStylePlan(computedNext, candidateAssignments => {
+                                    const candidateVariants = buildVariantAssignmentMap(selectedNextStyle, candidateAssignments, 'conservative');
+                                    const candidateQuality = evaluatePlanQuality(
+                                        computedPrimary,
+                                        computedPrimaryVariants,
+                                        candidateAssignments,
+                                        candidateVariants
+                                    );
+                                    if (!candidateQuality) return null;
+                                    return {
+                                        quality: candidateQuality,
+                                        decision: assessNextStyleFlow(primaryOnlyQuality, candidateQuality),
+                                    };
+                                })
+                                : null;
+
+                            if (safeNextPlan) {
+                                nextBalanceDecision = safeNextPlan.decision;
+                            }
+
+                            if (safeNextPlan && (safeNextPlan.decision.kind === 'continuous' || safeNextPlan.decision.kind === 'prep')) {
+                                const safeNextVariants = buildVariantAssignmentMap(selectedNextStyle, safeNextPlan.assignments, 'conservative');
+                                const prunedText = safeNextPlan.removedUnits > 0
+                                    ? ` Pruned ${safeNextPlan.removedUnits} next-style operator assignment${safeNextPlan.removedUnits === 1 ? '' : 's'} that would steal current-style capacity.`
+                                    : '';
+                                nextBalanceDecision = {
+                                    ...safeNextPlan.decision,
+                                    reason: `${safeNextPlan.decision.reason}${prunedText}`,
+                                };
+                                candidateNextAssignments = safeNextPlan.assignments;
+                                candidateNextVariantAssignments = safeNextVariants;
+                            }
+                        }
+                    } catch (nextErr) {
+                        console.error("Next-style balancing failed:", nextErr);
+                        nextBalanceError = nextErr instanceof Error ? nextErr.message : "Next-style balancing failed.";
+                    }
+                }
+
+                if (selectedNextStyle) {
+                    if (nextBalanceDecision) {
+                        combinedReasoning = `${combinedReasoning}\n\nNext style: ${nextBalanceDecision.reason}`;
+                    } else if (nextBalanceError) {
+                        combinedReasoning = `${combinedReasoning}\n\nNext style skipped: ${nextBalanceError}`;
+                    }
+                }
+
+                const candidateQuality = evaluatePlanQuality(
+                    computedPrimary,
+                    computedPrimaryVariants,
+                    candidateNextAssignments,
+                    candidateNextVariantAssignments
+                );
+
+                if (!candidateQuality) {
+                    return { error: 'Candidate could not be simulated.' };
+                }
+
+                return {
+                    strategy,
+                    primaryAssignments: computedPrimary,
+                    primaryVariantAssignments: computedPrimaryVariants,
+                    nextStyleAssignments: candidateNextAssignments,
+                    nextStyleVariantAssignments: candidateNextVariantAssignments,
+                    quality: candidateQuality,
+                    reasoning: combinedReasoning,
+                    nextBalanceDecision,
+                    nextBalanceError,
+                };
+            };
+
+            const strategies: BalanceStrategy[] = isTournamentRun
+                ? AI_AUTO_OPTIMIZE_STRATEGIES.map(strategy => ({ ...strategy }))
+                : [{
+                    id: mode,
+                    label: isImprovementRun ? 'Improve current plan' : 'Fresh balance',
+                    goal: isImprovementRun
+                        ? 'Improve this existing manual/AI plan only if the result can safely increase finished output, reduce idle/changeover waste, or reduce WIP without reducing current-style output. Preserve strong manual warm-up support assignments unless a better alternative is clear.'
+                        : 'Create the strongest initial balance for finished output while respecting skills, machine counts, dependency flow, WIP, and changeover waste.',
+                }];
+            const candidateResults: BalanceCandidate[] = [];
+            const failedRuns: string[] = [];
+
+            for (const strategy of strategies) {
+                const result = await runCandidate(strategy);
+                if ('error' in result) {
+                    failedRuns.push(`${strategy.label}: ${result.error}`);
+                    continue;
+                }
+                candidateResults.push(result);
+            }
+
+            if (candidateResults.length === 0) {
+                const description = failedRuns[0]
+                    ? `${failedRuns[0]} ${hasExistingPlan ? 'Current/best balance remains on screen.' : ''}`.trim()
+                    : 'AI did not return a usable balance.';
                 toast({
                     title: "AI Balancing Failed",
                     description,
@@ -2603,183 +2975,81 @@ export function AIProductionPlanner(): React.ReactNode {
                 return;
             }
 
-            const computedPrimary: Assignment[] = result.assignments.map(a => ({
-                operationId: a.operationId,
-                operatorIds: a.operatorIds
-            }));
-            const computedPrimaryVariants = buildVariantAssignmentMap(selectedStyle, computedPrimary);
-            let nextBalanceDecision: NextStyleFlowDecision | null = null;
-            let nextBalanceError: string | null = null;
-            let candidateNextAssignments: Assignment[] = [];
-            let candidateNextVariantAssignments: Record<string, Assignment[]> = {};
-            let combinedReasoning = result.reasoning;
-
-            // Continuous Flow: auto-assign the next style to soak up idle capacity —
-            // but capacity-aware, so it does NOT steal the primary's bottleneck.
-            if (selectedNextStyle) {
-                try {
-                    // 1. Find the primary's binding-constraint operator(s) from a
-                    //    primary-only simulation: the operator(s) on the terminal
-                    //    operation with the lowest finished count. Their "idle" time is
-                    //    constraint buffer, not free capacity, so it must be reserved.
-                    let constraintOperatorIds: string[] = [];
-                    try {
-                        const primarySim = simulateProductionSchedule(
-                            [selectedStyle],
-                            [computedPrimary],
-                            candidatesPool,
-                            machineCounts,
-                            availableMinutes,
-                            switchDelay,
-                            operatorAttendance,
-                            learnedPerformance,
-                            undefined,
-                            threadConstraintConfig
-                        );
-                        const counts: Record<string, number> = {};
-                        Object.values(primarySim.schedule).forEach((segs: any[]) =>
-                            segs.forEach(s => { counts[s.opId] = (counts[s.opId] || 0) + s.count; })
-                        );
-                        const feedsSomething = new Set<string>();
-                        selectedStyle.operations.forEach(op => (op.dependencies || []).forEach(d => feedsSomething.add(d)));
-                        const terminals = selectedStyle.operations.filter(op => !feedsSomething.has(op.id));
-                        let bindingOpId: string | null = null;
-                        let minCount = Infinity;
-                        terminals.forEach(op => {
-                            const c = counts[op.id] || 0;
-                            if (c < minCount) { minCount = c; bindingOpId = op.id; }
-                        });
-                        if (bindingOpId) {
-                            constraintOperatorIds = computedPrimary.find(a => a.operationId === bindingOpId)?.operatorIds || [];
-                        }
-                    } catch (simErr) {
-                        console.error("Primary constraint detection failed:", simErr);
-                    }
-
-                    // 2. For the next style, reserve each constraint operator to their
-                    //    UNIQUE skill(s) only. They can still cover a next-style op that
-                    //    nobody else can do (their scarce skill), but they can't be
-                    //    pulled onto shared-skill work that would starve the primary's
-                    //    bottleneck. Everyone else keeps their full skill set.
-                    const skillHolderCount: Record<string, number> = {};
-                    candidatesPool.forEach(o => (o.skills || []).forEach(sk => {
-                        skillHolderCount[sk] = (skillHolderCount[sk] || 0) + 1;
-                    }));
-                    const nextOperatorPool = candidatesPool.map(o => {
-                        if (!constraintOperatorIds.includes(o.id)) return o;
-                        const uniqueSkills = (o.skills || []).filter(sk => skillHolderCount[sk] === 1);
-                        return { ...o, skills: uniqueSkills };
-                    });
-
-                    const nextResult = await runLineBalancer(buildBalancerInput(selectedNextStyle, nextOperatorPool));
-                    if ('error' in nextResult) {
-                        nextBalanceError = nextResult.error;
-                    } else {
-                        const computedNext: Assignment[] = nextResult.assignments.map(a => ({
-                            operationId: a.operationId,
-                            operatorIds: a.operatorIds
-                        }));
-                        const primaryOnlyQuality = evaluatePlanQuality(
-                            computedPrimary,
-                            computedPrimaryVariants,
-                            [],
-                            {}
-                        );
-                        const safeNextPlan = primaryOnlyQuality
-                            ? findSafeNextStylePlan(computedNext, candidateAssignments => {
-                                const candidateVariants = buildVariantAssignmentMap(selectedNextStyle, candidateAssignments, 'conservative');
-                                const candidateQuality = evaluatePlanQuality(
-                                    computedPrimary,
-                                    computedPrimaryVariants,
-                                    candidateAssignments,
-                                    candidateVariants
-                                );
-                                if (!candidateQuality) return null;
-                                return {
-                                    quality: candidateQuality,
-                                    decision: assessNextStyleFlow(primaryOnlyQuality, candidateQuality),
-                                };
-                            })
-                            : null;
-
-                        if (safeNextPlan) {
-                            nextBalanceDecision = safeNextPlan.decision;
-                        }
-
-                        if (safeNextPlan && (safeNextPlan.decision.kind === 'continuous' || safeNextPlan.decision.kind === 'prep')) {
-                            const safeNextVariants = buildVariantAssignmentMap(selectedNextStyle, safeNextPlan.assignments, 'conservative');
-                            const prunedText = safeNextPlan.removedUnits > 0
-                                ? ` Pruned ${safeNextPlan.removedUnits} next-style operator assignment${safeNextPlan.removedUnits === 1 ? '' : 's'} that would steal current-style capacity.`
-                                : '';
-                            nextBalanceDecision = {
-                                ...safeNextPlan.decision,
-                                reason: `${safeNextPlan.decision.reason}${prunedText}`,
-                            };
-                            candidateNextAssignments = safeNextPlan.assignments;
-                            candidateNextVariantAssignments = safeNextVariants;
-                        }
-                    }
-                } catch (nextErr) {
-                    console.error("Next-style balancing failed:", nextErr);
-                    nextBalanceError = nextErr instanceof Error ? nextErr.message : "Next-style balancing failed.";
-                }
-            }
-
-            if (selectedNextStyle) {
-                if (nextBalanceDecision) {
-                    combinedReasoning = `${combinedReasoning}\n\nNext style: ${nextBalanceDecision.reason}`;
-                } else if (nextBalanceError) {
-                    combinedReasoning = `${combinedReasoning}\n\nNext style skipped: ${nextBalanceError}`;
-                }
-            }
-
-            const candidateQuality = evaluatePlanQuality(
-                computedPrimary,
-                computedPrimaryVariants,
-                candidateNextAssignments,
-                candidateNextVariantAssignments
+            const bestCandidate = candidateResults.reduce((best, candidate) =>
+                comparePlanQualityForAutoOptimize(candidate.quality, best.quality) > 0 ? candidate : best
             );
-            const rebalanceGuard = candidateQuality
-                ? assessRebalanceCandidate(existingQuality, candidateQuality)
-                : {
-                    action: 'keep-existing' as const,
-                    reason: 'Kept existing balance because the new run could not be simulated.',
-                    primaryOutputDelta: 0,
-                    nextOutputDelta: 0,
-                    actualOutputDelta: 0,
-                    wipDelta: 0,
-                };
+            const rebalanceGuard = assessRebalanceCandidate(existingQuality, bestCandidate.quality);
+            const tournamentSummary = isTournamentRun
+                ? [
+                    `AI auto optimize tournament (${candidateResults.length}/${strategies.length} successful runs):`,
+                    ...candidateResults.map(candidate =>
+                        `- ${candidate.strategy.label}: ${candidate.quality.primaryOutput} current pcs, ${candidate.quality.actualOutput} total pcs, ${candidate.quality.estimatedWip} WIP`
+                    ),
+                    ...failedRuns.map(run => `- Failed ${run}`),
+                    `Winner: ${bestCandidate.strategy.label}.`,
+                    `AI rebalance guard: ${rebalanceGuard.reason}`,
+                ].join('\n')
+                : `AI rebalance guard: ${rebalanceGuard.reason}`;
 
             if (rebalanceGuard.action === 'keep-existing') {
+                if (existingQuality) {
+                    saveBestBalanceSnapshot(
+                        isTournamentRun ? 'Auto optimize kept current plan' : 'Kept existing plan',
+                        existingQuality,
+                        tournamentSummary
+                    );
+                }
                 setLastNextStyleDecision(previousNextStyleDecision);
                 setAiReasoning(previousAiReasoning
-                    ? `${previousAiReasoning}\n\nAI rebalance guard: ${rebalanceGuard.reason}`
-                    : `AI rebalance guard: ${rebalanceGuard.reason}`
+                    ? `${previousAiReasoning}\n\n${tournamentSummary}`
+                    : tournamentSummary
                 );
                 toast({
-                    title: 'Existing Balance Kept',
+                    title: isTournamentRun ? 'Current Plan Kept' : 'Existing Balance Kept',
                     description: rebalanceGuard.reason,
                 });
                 return;
             }
 
-            setAssignments(computedPrimary);
-            setVariantAssignments(computedPrimaryVariants);
-            setNextAssignments(candidateNextAssignments);
-            setNextVariantAssignments(candidateNextVariantAssignments);
-            setLastNextStyleDecision(selectedNextStyle ? nextBalanceDecision : null);
-            setAiReasoning(`${combinedReasoning}\n\nAI rebalance guard: ${rebalanceGuard.reason}`);
+            setAssignments(bestCandidate.primaryAssignments);
+            setVariantAssignments(bestCandidate.primaryVariantAssignments);
+            setNextAssignments(bestCandidate.nextStyleAssignments);
+            setNextVariantAssignments(bestCandidate.nextStyleVariantAssignments);
+            setLastNextStyleDecision(selectedNextStyle ? bestCandidate.nextBalanceDecision : null);
+            saveBestBalanceSnapshot(
+                isTournamentRun ? `Auto optimize winner: ${bestCandidate.strategy.label}` : bestCandidate.strategy.label,
+                bestCandidate.quality,
+                bestCandidate.reasoning,
+                {
+                    assignments: bestCandidate.primaryAssignments,
+                    variantAssignments: bestCandidate.primaryVariantAssignments,
+                    nextAssignments: bestCandidate.nextStyleAssignments,
+                    nextVariantAssignments: bestCandidate.nextStyleVariantAssignments,
+                    nextStyleDecision: selectedNextStyle ? bestCandidate.nextBalanceDecision : null,
+                }
+            );
 
-            const toastTitle = !selectedNextStyle
-                ? "Line Balanced by AI"
-                : nextBalanceDecision?.kind === 'continuous'
-                    ? "Both Styles Balanced by AI"
-                    : nextBalanceDecision?.kind === 'prep'
-                        ? "Current Style Balanced; Next Style Prep Scheduled"
-                        : "Current Style Balanced; Next Style Held";
-            const toastDescription = !selectedNextStyle
-                ? "The line has been successfully optimized for maximum output."
-                : nextBalanceDecision?.reason || nextBalanceError || "Next style was not assigned because no safe idle-capacity plan was found.";
+            const reasoningPrefix = isTournamentRun
+                ? `${tournamentSummary}\n\nWinner reasoning:\n`
+                : isImprovementRun
+                    ? 'AI improvement pass from current plan:\n'
+                    : '';
+            setAiReasoning(`${reasoningPrefix}${bestCandidate.reasoning}${isTournamentRun ? '' : `\n\n${tournamentSummary}`}`);
+
+            const toastTitle = isTournamentRun
+                ? 'AI Auto Optimize Applied Best Run'
+                : !selectedNextStyle
+                    ? isImprovementRun ? "Current Plan Improved by AI" : "Line Balanced by AI"
+                    : bestCandidate.nextBalanceDecision?.kind === 'continuous'
+                        ? isImprovementRun ? "Both Styles Improved by AI" : "Both Styles Balanced by AI"
+                        : bestCandidate.nextBalanceDecision?.kind === 'prep'
+                            ? isImprovementRun ? "Current Plan Improved; Next Style Prep Scheduled" : "Current Style Balanced; Next Style Prep Scheduled"
+                            : isImprovementRun ? "Current Plan Improved; Next Style Held" : "Current Style Balanced; Next Style Held";
+            const toastDescription = isTournamentRun
+                ? `${bestCandidate.strategy.label}: ${bestCandidate.quality.primaryOutput} current pcs, ${bestCandidate.quality.estimatedWip} WIP.`
+                : !selectedNextStyle
+                    ? isImprovementRun ? "AI found a safer improvement over the current plan." : "The line has been successfully optimized for maximum output."
+                    : bestCandidate.nextBalanceDecision?.reason || bestCandidate.nextBalanceError || "Next style was not assigned because no safe idle-capacity plan was found.";
             toast({
                 title: toastTitle,
                 description: toastDescription,
@@ -2796,6 +3066,7 @@ export function AIProductionPlanner(): React.ReactNode {
             });
         } finally {
             setIsBalancing(false);
+            setBalanceRunMode(null);
         }
     }, [
         selectedStyle,
@@ -2804,10 +3075,13 @@ export function AIProductionPlanner(): React.ReactNode {
         availableOperatorIds,
         aiReasoning,
         lastNextStyleDecision,
+        currentPlanQuality,
         assignments,
         variantAssignments,
         nextAssignments,
         nextVariantAssignments,
+        dailyTarget,
+        salaryProjection.dailyDressTarget,
         machineCounts,
         availableMinutes,
         switchDelay,
@@ -2817,6 +3091,7 @@ export function AIProductionPlanner(): React.ReactNode {
         hasAnyScopedAssignments,
         buildVariantAssignmentMap,
         evaluatePlanQuality,
+        saveBestBalanceSnapshot,
         toast
     ]);
 
@@ -3065,6 +3340,10 @@ export function AIProductionPlanner(): React.ReactNode {
         theoreticalCapacityPotential
     ]);
 
+    useEffect(() => {
+        setDailyTarget(orderBoundedPotential);
+    }, [orderBoundedPotential]);
+
     const isPlannedOrderComplete = useMemo(() => {
         const primaryComplete = !selectedStyle || bottleneckOutput.primary >= remainingPrimaryQty;
         const nextComplete = !selectedNextStyle || bottleneckOutput.next >= remainingNextQty;
@@ -3279,7 +3558,7 @@ export function AIProductionPlanner(): React.ReactNode {
                         <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                             <div>
                                 <h4 className="text-sm font-semibold">Planning Setup</h4>
-                                <p className="text-xs text-muted-foreground">Choose style, team mode, and planning inputs.</p>
+                                <p className="text-xs text-muted-foreground">Choose style, available team, and switch timing.</p>
                             </div>
                             {selectedStyle && (
                                 <div className="text-xs text-muted-foreground">
@@ -3288,7 +3567,7 @@ export function AIProductionPlanner(): React.ReactNode {
                             )}
                         </div>
 
-                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4 items-end">
+                        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 items-end">
                             <div className="space-y-2">
                             <label className="text-sm font-medium">Select Style</label>
                             <Select value={selectedStyleId} onValueChange={setSelectedStyleId}>
@@ -3325,39 +3604,13 @@ export function AIProductionPlanner(): React.ReactNode {
                         </div>
 
                             <div className="space-y-2">
-                            <label className="text-sm font-medium">Planning Mode</label>
-                            <Select
-                                value={planningMode}
-                                onValueChange={(v: 'target' | 'capacity') => setPlanningMode(v)}
-                            >
-                                <SelectTrigger>
-                                    <SelectValue />
-                                </SelectTrigger>
-                                <SelectContent>
-                                    <SelectItem value="target">Target Driven (Set Qty)</SelectItem>
-                                    <SelectItem value="capacity">Capacity Driven (Set Team Size)</SelectItem>
-                                </SelectContent>
-                            </Select>
-                        </div>
-
-                            <div className="space-y-2">
-                            <label className="text-sm font-medium">
-                                {planningMode === 'target' ? 'Daily Target (Pcs)' : 'Available Operators'}
-                            </label>
-                            {planningMode === 'capacity' ? (
+                            <label className="text-sm font-medium">Available Operators</label>
                                 <MultiSelect
                                     options={operators.map(o => ({ label: o.name, value: o.id }))}
                                     selected={availableOperatorIds}
                                     onChange={setAvailableOperatorIds}
                                     placeholder="Select operators..."
                                 />
-                            ) : (
-                                <Input
-                                    type="number"
-                                    value={dailyTarget}
-                                    onChange={(e) => setDailyTarget(Number(e.target.value))}
-                                />
-                            )}
                         </div>
 
                             <div className="space-y-2">
@@ -3375,19 +3628,21 @@ export function AIProductionPlanner(): React.ReactNode {
 
                     <div className="rounded-md border bg-muted/20 p-3 space-y-3">
                         <div className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Forecast Snapshot</div>
-                    {planningMode === 'capacity' && (
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                             <div className="p-3 bg-muted/50 rounded-md flex flex-col items-end min-w-[120px]">
-                                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider" title="Theoretical max based on team size">Max Potential</span>
+                                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider" title="Selected operator capacity bounded by remaining order quantity">Capacity Target</span>
                                 <div className="flex items-baseline gap-1">
                                     <span className="text-xl font-bold text-muted-foreground">
                                         {orderBoundedPotential}
                                     </span>
                                     <span className="text-xs text-muted-foreground">pcs/day</span>
                                 </div>
+                                <div className="text-[10px] text-muted-foreground">
+                                    {availableOperatorIds.length} operator{availableOperatorIds.length === 1 ? '' : 's'} selected
+                                </div>
                             </div>
                             <div className="p-3 bg-primary/10 border border-primary/20 rounded-md flex flex-col items-end min-w-[150px]">
-                                <span className="text-xs text-primary font-medium uppercase tracking-wider" title="Actual simulation output containing specific order quantities">Actual Output</span>
+                                <span className="text-xs text-primary font-medium uppercase tracking-wider" title="Actual simulation output containing specific order quantities">Simulation Output</span>
                                 <div className="flex flex-col items-end">
                                     <div className="flex items-baseline gap-1">
                                         <span className="text-3xl font-bold text-primary">
@@ -3408,23 +3663,25 @@ export function AIProductionPlanner(): React.ReactNode {
                                     orderBoundedPotential < theoreticalCapacityPotential &&
                                     (bottleneckOutput.primary + bottleneckOutput.next) >= orderBoundedPotential && (
                                     <div className="text-[10px] text-amber-600 font-medium mt-1">
-                                        ⚠ Limited by Order Qty
+                                        Limited by Order Qty
                                     </div>
                                 )}
                             </div>
-                        </div>
-                    )}
-                    {planningMode === 'target' && selectedStyle && (
-                        <div className="p-3 bg-background rounded-md border flex justify-between items-center">
-                            <span className="text-sm font-medium">Estimated Operators Needed:</span>
-                            <div className="flex items-baseline gap-1">
-                                <span className="text-2xl font-bold text-primary">
-                                    {Math.ceil((dailyTarget * selectedStyle.totalSmv) / availableMinutes)}
-                                </span>
-                                <span className="text-sm text-muted-foreground">operators</span>
+                            <div className="p-3 bg-background border rounded-md flex flex-col items-end min-w-[150px]">
+                                <span className="text-xs text-muted-foreground font-medium uppercase tracking-wider" title="Break-even output needed to cover monthly labor targets">Salary Target</span>
+                                <div className="flex items-baseline gap-1">
+                                    <span className="text-xl font-bold">
+                                        {salaryProjection.dailyDressTarget}
+                                    </span>
+                                    <span className="text-xs text-muted-foreground">pcs/day</span>
+                                </div>
+                                <div className={`text-[10px] font-medium ${orderBoundedPotential >= salaryProjection.dailyDressTarget ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-600'}`}>
+                                    {orderBoundedPotential >= salaryProjection.dailyDressTarget
+                                        ? 'Capacity covers target'
+                                        : `${Math.max(0, salaryProjection.dailyDressTarget - orderBoundedPotential)} pcs/day short`}
+                                </div>
                             </div>
                         </div>
-                    )}
                     </div>
 
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-3">
@@ -3873,10 +4130,10 @@ export function AIProductionPlanner(): React.ReactNode {
 
                             <Button
                                 className="w-full lg:w-auto bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 text-white hover:from-indigo-600 hover:to-pink-600 border-none shadow-md shadow-purple-500/20"
-                                onClick={handleAILineBalance}
+                                onClick={() => handleAILineBalance('fresh')}
                                 disabled={!selectedStyle || isBalancing}
                             >
-                                {isBalancing ? (
+                                {isBalancing && balanceRunMode === 'fresh' ? (
                                     <>
                                         <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                                         AI Balancing...
@@ -3887,6 +4144,56 @@ export function AIProductionPlanner(): React.ReactNode {
                                         AI Balance Line
                                     </>
                                 )}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                className="w-full lg:w-auto"
+                                onClick={() => handleAILineBalance('improve')}
+                                disabled={!selectedStyle || !hasCurrentPrimaryPlan || isBalancing}
+                                title={hasCurrentPrimaryPlan ? 'Ask AI to improve the current accepted/manual plan' : 'Create or accept a plan before improving it'}
+                            >
+                                {isBalancing && balanceRunMode === 'improve' ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        AI Improving...
+                                    </>
+                                ) : (
+                                    <>
+                                        <RefreshCcw className="mr-2 h-4 w-4" />
+                                        AI Improve Current Plan
+                                    </>
+                                )}
+                            </Button>
+                            <Button
+                                variant="outline"
+                                className="w-full lg:w-auto border-emerald-300 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-800 dark:text-emerald-300 dark:hover:bg-emerald-950/20"
+                                onClick={() => handleAILineBalance('auto')}
+                                disabled={!selectedStyle || isBalancing}
+                                title="Run four AI strategies, simulate each, and apply only the best safe result"
+                            >
+                                {isBalancing && balanceRunMode === 'auto' ? (
+                                    <>
+                                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                                        AI Optimizing...
+                                    </>
+                                ) : (
+                                    <>
+                                        <Brain className="mr-2 h-4 w-4" />
+                                        AI Auto Optimize 4 Runs
+                                    </>
+                                )}
+                            </Button>
+                            <Button
+                                variant="secondary"
+                                className="w-full lg:w-auto"
+                                onClick={handleRestoreBestBalance}
+                                disabled={!savedBestBalance || isBalancing}
+                                title={savedBestBalance
+                                    ? `Restore ${savedBestBalance.sourceLabel}: ${savedBestBalance.quality.primaryOutput} current pcs, ${savedBestBalance.quality.estimatedWip} WIP`
+                                    : 'No saved best plan yet'}
+                            >
+                                <Save className="mr-2 h-4 w-4" />
+                                {savedBestBalance ? `Restore Best (${savedBestBalance.quality.primaryOutput} pcs)` : 'Restore Best'}
                             </Button>
                         </div>
                     </div>
@@ -4254,15 +4561,22 @@ export function AIProductionPlanner(): React.ReactNode {
                                 <TableBody>
                                     {(() => {
                                         const styleScope: PlannerScope = i === 0 ? 'primary' : 'next';
-                                        const styleRemainingTarget = planningMode === 'capacity'
-                                            ? (
-                                                style.id === selectedStyle?.id
-                                                    ? remainingPrimaryQty
-                                                    : style.id === selectedNextStyle?.id
-                                                        ? remainingNextQty
-                                                        : dailyTarget
-                                            )
-                                            : dailyTarget;
+                                        const hasStylePlan = styleScope === 'primary'
+                                            ? hasAnyScopedAssignments(assignments, variantAssignments)
+                                            : hasAnyScopedAssignments(nextAssignments, nextVariantAssignments);
+                                        const plannedStyleOutput = styleScope === 'primary'
+                                            ? bottleneckOutput.primary
+                                            : bottleneckOutput.next;
+                                        const capacityStyleTarget = styleScope === 'primary'
+                                            ? dailyTarget
+                                            : Math.max(0, orderBoundedPotential - dailyTarget);
+                                        const remainingStyleQty = styleScope === 'primary'
+                                            ? remainingPrimaryQty
+                                            : remainingNextQty;
+                                        const rawStyleTarget = hasStylePlan ? plannedStyleOutput : capacityStyleTarget;
+                                        const styleRemainingTarget = remainingStyleQty > 0
+                                            ? Math.min(Math.max(0, rawStyleTarget), remainingStyleQty)
+                                            : Math.max(0, rawStyleTarget);
                                         const styleQty = Math.max(
                                             1,
                                             style.variants?.reduce((sum, variant) => sum + (variant.quantity || 0), 0) || style.quantity || 1

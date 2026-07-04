@@ -44,6 +44,32 @@ Available Machine Inventory Constraints (Max operators on a machine type):
   * {{this}}
 {{/each}}
 
+{{#if currentAssignments}}
+Current Plan Baseline To Improve:
+{{#each currentAssignments}}
+  * Operation ID: {{this.operationId}} | Operators: {{this.operatorIds}}{{#if this.variantColor}} | Variant: {{this.variantColor}}{{/if}}
+{{/each}}
+
+Current Plan Metrics:
+{{#if currentPlanSummary}}
+- Current style finished output: {{currentPlanSummary.currentStyleOutput}} pcs/day
+- Next style finished output: {{#if currentPlanSummary.nextStyleOutput}}{{currentPlanSummary.nextStyleOutput}}{{else}}0{{/if}} pcs/day
+- Total finished output: {{currentPlanSummary.totalOutput}} pcs/day
+- Estimated WIP: {{currentPlanSummary.estimatedWip}} pcs
+- Primary WIP: {{#if currentPlanSummary.primaryWip}}{{currentPlanSummary.primaryWip}}{{else}}0{{/if}} pcs
+- Next-style WIP: {{#if currentPlanSummary.nextWip}}{{currentPlanSummary.nextWip}}{{else}}0{{/if}} pcs
+- Capacity target: {{#if currentPlanSummary.capacityTarget}}{{currentPlanSummary.capacityTarget}}{{else}}Not provided{{/if}} pcs/day
+- Salary break-even target: {{#if currentPlanSummary.salaryTarget}}{{currentPlanSummary.salaryTarget}}{{else}}Not provided{{/if}} pcs/day
+{{/if}}
+
+You are doing a SECOND-PASS improvement of a human-adjusted plan, not a fresh plan from zero. Treat the current plan as the baseline. Preserve working manual choices unless a specific change improves the baseline. If no assignment change is likely to beat the baseline, return the same assignment map and explain why the current plan should be kept.
+{{/if}}
+
+{{#if improvementGoal}}
+Optimization Strategy For This Run:
+{{improvementGoal}}
+{{/if}}
+
 Rules to strictly follow:
 1. Every single operation in the garment style MUST be assigned to at least one operator.
 2. An operator CAN ONLY be assigned to an operation if they have the skill for it. An operator's skill list corresponds to the "machineType" of the operation. (e.g. if an operation requires "Single Needle Lockstitch", the assigned operator must have "Single Needle Lockstitch" in their skills array).
